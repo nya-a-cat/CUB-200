@@ -269,6 +269,11 @@ def main():
         test_transform=test_transform
     )
 
+    print("\n=== Dataset Info ===")
+    print(f"Training set size: {len(train_set)}")
+    print(f"Test set size: {len(test_set)}")
+    print("========================\n")
+
     # Initialize model
     model = CustomModel(num_classes=dataset_config['dataset']['num_classes'])
     model.to(device)
@@ -278,6 +283,21 @@ def main():
         **{k: v for k, v in training_config['training'].items()
            if k not in ['early_stopping']}
     )
+
+    # 添加这段代码来打印训练参数
+    print("\n=== Training Arguments ===")
+    print(f"Output directory: {training_args.output_dir}")
+    print(f"Learning rate: {training_args.learning_rate}")
+    print(f"Batch size: {training_args.per_device_train_batch_size}")
+    print(f"Number of epochs: {training_args.num_train_epochs}")
+    print(f"Evaluation strategy: {training_args.eval_strategy}")
+    # print(f"Evaluation steps: {training_args.eval_steps}")
+    print(f"Save strategy: {training_args.save_strategy}")
+    # print(f"Save steps: {training_args.save_steps}")
+    print(f"Save total limit: {training_args.save_total_limit}")
+    # print(f"Load best model at end: {training_args.load_best_model_at_end}")
+    # print(f"Metric for best model: {training_args.metric_for_best_model}")
+    print("========================\n")# Set up early stopping
 
     # Set up early stopping
     early_stopping = EarlyStoppingCallback(
