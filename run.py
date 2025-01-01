@@ -290,7 +290,7 @@ def main():
     print(f"Learning rate: {training_args.learning_rate}")
     print(f"Batch size: {training_args.per_device_train_batch_size}")
     print(f"Number of epochs: {training_args.num_train_epochs}")
-    # print(f"Eval strategy: {training_args.eval_strategy}")
+    print(f"Eval strategy: {training_args.evaluation_strategy}")
     print(f"Save strategy: {training_args.save_strategy}")
     # print(f"Save steps: {training_args.save_steps}")
     print(f"Save total limit: {training_args.save_total_limit}")
