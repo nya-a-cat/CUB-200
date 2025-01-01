@@ -18,6 +18,7 @@ save_steps = 500
 save_total_limit = 3
 load_best_model_at_end = true
 metric_for_best_model = "accuracy"
+dataloader_prefetch_factor = 2
 
 [early_stopping]
 patience = 10
