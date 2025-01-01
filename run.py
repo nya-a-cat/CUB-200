@@ -298,6 +298,7 @@ def main():
 
     # Train the model
     try:
+        # trainer.train(resume_from_checkpoint=True)
         trainer.train()
 
         # Save the final model
