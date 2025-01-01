@@ -15,7 +15,7 @@ class ResNet50(nn.Module):
             weights = ResNet50_Weights.DEFAULT
 
         # 创建预训练的ResNet50模型
-        self.model = models.resnet50(weights=weights)
+        self.model = models.resnet50(weights=None)
 
         # 修改输出类别数
         if num_classes != 1000:
