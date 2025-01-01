@@ -1,0 +1,15 @@
+name: CIFAT-10
+channels:
+  - defaults
+dependencies:
+  - python==3.9.21
+  - pytorch
+  - torchvision
+  - timm
+  - notebook
+  - pandas
+  - seaborn
+  - matplotlib
+  - pillow
+  - transformers
+prefix: C:\Users\element\miniconda3\envs\CIFAT-10
