@@ -75,10 +75,10 @@ def main():
 
     # 加载数据集
     train_set = CUB_200(
-        root="CUB-200", train=True, download=True, transform=transform)
+        root="../../CUB-200", train=True, download=True, transform=transform)
 
     test_set = CUB_200(
-        root="CUB-200", train=False, download=True, transform=transform)
+        root="../../CUB-200", train=False, download=True, transform=transform)
 
     # 训练参数
     training_args = TrainingArguments(
@@ -92,15 +92,13 @@ def main():
         warmup_ratio=0.1,
         logging_dir='./logs',
         logging_steps=1,
-        eval_strategy="steps",  # 修改为 eval_strategy
-        eval_steps=500,
+        eval_strategy="epoch",
+        save_strategy = "epoch",
         report_to="wandb",
         run_name="ResNet50-CUB200",
         load_best_model_at_end=True,  # 训练结束时自动加载验证集表现最好的模型
         metric_for_best_model="accuracy",  # 用准确率来判断哪个是"最好的"模型
         save_total_limit=3,  # 最多保存3个检查点，超过会删除旧的
-        save_strategy="steps",  # 按步数保存
-        save_steps=500,  # 每500步保存一次检查点
     )
 
     # 初始化模型
