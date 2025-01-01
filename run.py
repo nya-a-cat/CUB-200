@@ -315,6 +315,14 @@ def main():
         callbacks=[early_stopping]
     )
 
+    # Add this calculation and print statement
+    steps_per_epoch = len(train_set) // training_args.per_device_train_batch_size
+    print("\n=== Steps per Epoch Info ===")
+    print(f"Training set size: {len(train_set)}")
+    print(f"Batch size: {training_args.per_device_train_batch_size}")
+    print(f"Steps per epoch: {steps_per_epoch}")
+    print("========================\n")
+
     # Train the model
     try:
         # trainer.train(resume_from_checkpoint=True)
