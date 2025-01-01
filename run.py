@@ -12,6 +12,50 @@ import wandb
 from dataclasses import dataclass
 import src.models.resnet50 as resnet50
 from src.data.writing_custom_datasets import CUB_200
+import torchvision.transforms as transforms
+import ast
+
+def create_transform(transform_list):
+    """
+    Create a composition of transforms from a list of transform strings
+
+    Args:
+        transform_list (List[str]): List of transform strings like ["RandomResizedCrop(224)", "ToTensor()"]
+
+    Returns:
+        transforms.Compose: Composition of transforms
+    """
+    transform_functions = []
+
+    for transform_str in transform_list:
+        try:
+            # 使用ast.parse来安全地解析transform字符串
+            tree = ast.parse(transform_str, mode='eval')
+            if isinstance(tree.body, ast.Call):
+                transform_name = tree.body.func.id
+                # 获取参数
+                args = [ast.literal_eval(arg) for arg in tree.body.args]
+                kwargs = {kw.arg: ast.literal_eval(kw.value) for kw in tree.body.keywords}
+
+                # 获取transform类
+                transform_class = getattr(transforms, transform_name)
+
+                # 创建transform实例
+                if kwargs:
+                    transform = transform_class(*args, **kwargs)
+                else:
+                    transform = transform_class(*args)
+
+                transform_functions.append(transform)
+
+        except Exception as e:
+            print(f"Error parsing transform: {transform_str}. Error: {str(e)}")
+            continue
+
+    return transforms.Compose(transform_functions)
+
+
+
 
 @dataclass
 class CustomDataCollator:
@@ -60,11 +104,22 @@ def compute_metrics(pred):
 def get_dataset(name, root, train_transform, test_transform):
     """获取数据集"""
     if name == "CUB-200":
-        train_set = CUB_200(root=root, train=True, transform=train_transform)
-        test_set = CUB_200(root=root, train=False, transform=test_transform)
+        train_set = CUB_200(
+            root=root,
+            train=True,
+            transform=train_transform,
+            download=True  # 添加这个参数
+        )
+        test_set = CUB_200(
+            root=root,
+            train=False,
+            transform=test_transform,
+            download=True  # 添加这个参数
+        )
         return train_set, test_set
     else:
         raise ValueError(f"Dataset {name} not supported")
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Training script with configurable dataset and training parameters')
@@ -114,17 +169,6 @@ def load_config(config_path):
 
     with open(config_path, 'rb') as f:
         return tomli.load(f)
-
-def create_transform(transform_config):
-    """根据配置创建数据转换pipeline"""
-    transform_list = []
-    for transform_name, params in transform_config:
-        transform_class = getattr(transforms, transform_name)
-        if params:
-            transform_list.append(transform_class(**params))
-        else:
-            transform_list.append(transform_class())
-    return transforms.Compose(transform_list)
 
 
 def validate_config(config, config_type):
@@ -184,8 +228,8 @@ def main():
         )
 
     # Create transforms
-    train_transform = create_transform(dataset_config['dataset']['train_transform'])
-    test_transform = create_transform(dataset_config['dataset']['test_transform'])
+    train_transform = create_transform(training_config['transform']['train_transform'])
+    test_transform = create_transform(training_config['transform']['test_transform'])
 
     # Load datasets
     train_set, test_set = get_dataset(

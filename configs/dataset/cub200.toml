@@ -1,7 +1,7 @@
 # configs/dataset/cub200.toml
 [dataset]
 name = "CUB-200"
-root = "./data/CUB_200_2011"
+root = "CUB-200"
 num_classes = 200
 train_transform = [
     ["RandomResizedCrop", { size = 224 }],
