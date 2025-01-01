@@ -19,7 +19,8 @@ save_total_limit = 3
 load_best_model_at_end = true
 metric_for_best_model = "accuracy"
 dataloader_prefetch_factor = 5
-dataloader_num_workers=40
+dataloader_num_workers=1000000
+# 4流畅 40有点卡
 
 [early_stopping]
 patience = 10
