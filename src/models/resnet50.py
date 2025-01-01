@@ -1,5 +1,4 @@
 # resnet50.py
-import torch
 import torch.nn as nn
 import torchvision.models as models
 from torchvision.models.resnet import ResNet50_Weights

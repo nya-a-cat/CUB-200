@@ -1,0 +1,24 @@
+# configs/training/base.toml
+[training]
+output_dir = "./results/base"
+num_train_epochs = 100
+per_device_train_batch_size = 128
+per_device_eval_batch_size = 100
+learning_rate = 0.001
+weight_decay = 0.01
+warmup_steps = 500
+logging_dir = "./logs"
+logging_steps = 1
+evaluation_strategy = "epoch"
+save_strategy = "epoch"
+save_total_limit = 3
+load_best_model_at_end = true
+metric_for_best_model = "accuracy"
+
+[early_stopping]
+patience = 10
+threshold = 0.01
+
+[wandb]
+project = "image-classification"
+run_name = "base-training"

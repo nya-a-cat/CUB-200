@@ -1,12 +1,11 @@
 import os
 from pathlib import Path
-from PIL import Image
+from typing import Any, Callable, Dict, Iterator, Optional, Tuple
 
 import pandas as pd
-import torch
 import torchvision.datasets.utils as dataset_utils
+from PIL import Image
 from torchvision.datasets import VisionDataset
-from typing import Any, Callable, Dict, Iterator, Optional, Tuple
 
 
 class CUB_200(VisionDataset):

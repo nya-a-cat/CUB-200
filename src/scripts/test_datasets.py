@@ -1,12 +1,9 @@
 from PIL import Image
-import torch
 from torch.utils.data import DataLoader
-from writing_custom_datasets import CUB_200
+from src.data.writing_custom_datasets import CUB_200
 from torchvision import transforms
 import matplotlib.pyplot as plt
 import numpy as np
-import os# 可选，但有时会用到路径操作
-
 
 # 定义数据预处理（可以考虑调整填充颜色）
 transform = transforms.Compose([

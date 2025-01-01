@@ -2,9 +2,8 @@
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
-import resnet50
-from writing_custom_datasets import CUB_200
-import torchvision
+import src.models.resnet50 as resnet50
+from src.data.writing_custom_datasets import CUB_200
 from dataclasses import dataclass
 import wandb
 from grams import Grams
@@ -83,7 +82,7 @@ def main():
 
     # 训练参数
     training_args = TrainingArguments(
-        output_dir='./results',
+        output_dir='../../results',
         num_train_epochs=200,
         per_device_train_batch_size=128,
         per_device_eval_batch_size=100,
