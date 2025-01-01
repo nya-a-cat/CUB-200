@@ -21,7 +21,7 @@ dataloader_num_workers=5
 # 4流畅 40有点卡
 
 [early_stopping]
-patience = 10
+patience = 100
 threshold = 0.01
 
 [wandb]
