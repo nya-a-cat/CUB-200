@@ -133,28 +133,58 @@ def parse_args():
                         help='Disable wandb logging')
     return parser.parse_args()
 
-def get_latest_training_config(config_type='base'):
+
+def get_latest_training_config(config_type='base', target_date=None):
     """
     自动获取最新的训练配置文件
-    config_type: 'base' 或 'fast'
-    返回最新的配置文件路径
+
+    Args:
+        config_type: str, 'base' 或 'fast'
+        target_date: datetime 或 None, 目标日期时间。如果为 None，则获取最新的配置文件
+
+    Returns:
+        str: 配置文件路径
     """
     training_config_dir = Path('configs/training')
-    pattern = f"train_\\d{{8}}_{config_type}.toml"
 
-    # 获取所有匹配的配置文件
+    # 同时支持14位和8位时间戳的模式
+    pattern_seconds = f"train_\\d{{14}}_{config_type}.toml"  # 14位 (YYYYMMDDHHmmss)
+    pattern_days = f"train_\\d{{8}}_{config_type}.toml"  # 8位 (YYYYMMDD)
+
     config_files = []
     for f in training_config_dir.glob(f'train_*_{config_type}.toml'):
-        if re.match(pattern, f.name):
+        date = None
+
+        # 先尝试匹配精确到秒的格式
+        if re.match(pattern_seconds, f.name):
             date_str = f.name.split('_')[1]
             try:
-                date = datetime.strptime(date_str, '%Y%m%d')
-                config_files.append((date, f))
+                date = datetime.strptime(date_str, '%Y%m%d%H%M%S')
             except ValueError:
                 continue
 
+        # 如果不是精确到秒的格式，尝试匹配日期格式
+        elif re.match(pattern_days, f.name):
+            date_str = f.name.split('_')[1]
+            try:
+                date = datetime.strptime(date_str, '%Y%m%d')
+            except ValueError:
+                continue
+
+        # 如果成功解析了时间
+        if date:
+            # 如果指定了目标日期，只添加不晚于目标日期的配置文件
+            if target_date is None or date <= target_date:
+                config_files.append((date, f))
+
     if not config_files:
-        raise FileNotFoundError(f"No training config files found for type: {config_type}")
+        if target_date:
+            raise FileNotFoundError(
+                f"No training config files found for type '{config_type}' "
+                f"on or before {target_date.strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+        else:
+            raise FileNotFoundError(f"No training config files found for type: {config_type}")
 
     # 返回日期最新的配置文件
     latest_config = max(config_files, key=lambda x: x[0])[1]
