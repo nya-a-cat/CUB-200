@@ -1,16 +1,19 @@
 # configs/training/train_20240102_base.toml
 [training]
 output_dir = "./results/base_20240102"
-num_train_epochs = 100
+num_train_epochs = 200
 per_device_train_batch_size = 128
 per_device_eval_batch_size = 100
 learning_rate = 0.001
 weight_decay = 0.01
 warmup_steps = 500
+warmup_ratio = 0.1
 logging_dir = "./logs"
 logging_steps = 1
-evaluation_strategy = "epoch"
-save_strategy = "epoch"
+evaluation_strategy = "steps"
+eval_steps = 500
+save_strategy = "steps"
+save_steps = 500
 save_total_limit = 3
 load_best_model_at_end = true
 metric_for_best_model = "accuracy"
@@ -20,5 +23,5 @@ patience = 10
 threshold = 0.01
 
 [wandb]
-project = "cub200-classification"
-run_name = "base-training"
+project = "CUB-200-Classification"
+run_name = "ResNet50-base"

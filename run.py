@@ -5,13 +5,66 @@ from pathlib import Path
 import re
 from datetime import datetime
 import torch
+import torch.nn as nn
 import torchvision.transforms as transforms
 from transformers import Trainer, TrainingArguments, EarlyStoppingCallback
 import wandb
-from src.models.resnet50 import CustomResNet50
-from src.data.datasets import get_dataset
-from src.utils.trainer import compute_metrics, CustomDataCollator
+from dataclasses import dataclass
+import src.models.resnet50 as resnet50
+from src.data.writing_custom_datasets import CUB_200
 
+@dataclass
+class CustomDataCollator:
+    def __call__(self, features):
+        images = [f[0] for f in features]
+        labels = [f[1] for f in features]
+
+        images = torch.stack(images)
+        labels = torch.tensor(labels)
+
+        return {
+            'pixel_values': images,
+            'labels': labels
+        }
+
+class CustomModel(nn.Module):
+    def __init__(self, num_classes=200):
+        super().__init__()
+        self.backbone = resnet50.ResNet50(num_classes=num_classes)
+
+    def forward(self, pixel_values=None, labels=None):
+        if pixel_values is None:
+            raise ValueError("No input images provided")
+
+        outputs = self.backbone(pixel_values)
+
+        loss = None
+        if labels is not None:
+            loss_fn = nn.CrossEntropyLoss()
+            loss = loss_fn(outputs, labels)
+
+        return {
+            "loss": loss,
+            "logits": outputs
+        }
+
+def compute_metrics(pred):
+    """计算评估指标"""
+    labels = pred.label_ids
+    preds = pred.predictions.argmax(-1)
+    acc = (preds == labels).mean()
+    return {
+        'accuracy': acc,
+    }
+
+def get_dataset(name, root, train_transform, test_transform):
+    """获取数据集"""
+    if name == "CUB-200":
+        train_set = CUB_200(root=root, train=True, transform=train_transform)
+        test_set = CUB_200(root=root, train=False, transform=test_transform)
+        return train_set, test_set
+    else:
+        raise ValueError(f"Dataset {name} not supported")
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Training script with configurable dataset and training parameters')
@@ -24,7 +77,6 @@ def parse_args():
     parser.add_argument('--no-wandb', action='store_true',
                         help='Disable wandb logging')
     return parser.parse_args()
-
 
 def get_latest_training_config(config_type='base'):
     """
@@ -62,7 +114,6 @@ def load_config(config_path):
 
     with open(config_path, 'rb') as f:
         return tomli.load(f)
-
 
 def create_transform(transform_config):
     """根据配置创建数据转换pipeline"""
@@ -145,7 +196,7 @@ def main():
     )
 
     # Initialize model
-    model = CustomResNet50(num_classes=dataset_config['dataset']['num_classes'])
+    model = CustomModel(num_classes=dataset_config['dataset']['num_classes'])
     model.to(device)
 
     # Create training arguments
@@ -194,7 +245,6 @@ def main():
         # Clean up wandb
         if not args.no_wandb:
             wandb.finish()
-
 
 if __name__ == '__main__':
     main()
