@@ -161,15 +161,25 @@ def main():
     )
 
     # 数据转换
+    # train_transform = transforms.Compose([
+    #     transforms.RandomResizedCrop(224),
+    #     transforms.RandomHorizontalFlip(),
+    #     transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+    #     transforms.RandomRotation(degrees=10),
+    #     transforms.RandAugment(num_ops=2, magnitude=7),
+    #     transforms.ToTensor(),
+    #     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    #     transforms.RandomErasing(p=0.2)
+    # ])
+
     train_transform = transforms.Compose([
-        transforms.RandomResizedCrop(224),
-        transforms.RandomHorizontalFlip(),
-        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
-        transforms.RandomRotation(degrees=10),
-        transforms.RandAugment(num_ops=2, magnitude=7),
+        transforms.Resize((256, 256)),  # 首先调整大小到稍大尺寸
+        transforms.RandomCrop(224),  # 随机裁剪到目标尺寸
+        transforms.RandomHorizontalFlip(p=0.5),  # 水平翻转
+        transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1),  # 降低颜色抖动的强度
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        transforms.RandomErasing(p=0.2)
+        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                             std=[0.229, 0.224, 0.225])
     ])
 
     test_transform = transforms.Compose([
@@ -235,6 +245,18 @@ def main():
                 images, targets = images.to(device), targets.to(device)
                 outputs = model(images)
                 loss = criterion(outputs, targets)
+
+                # 获取预测结果
+                probabilities = F.softmax(outputs, dim=1)
+                _, predicted = torch.max(probabilities, 1)
+
+                # 构建caption，包含真实标签和预测标签
+                caption = f"Test Batch {batch_idx}\n"
+                caption += f"True labels: {targets[:16].cpu().tolist()}\n"
+                caption += f"Predicted: {predicted[:16].cpu().tolist()}"
+
+                # 可视化当前batch
+                visualizer.visualize_batch(images, targets, predicted, phase=f"test_batch_{batch_idx}", caption=caption)
 
                 if batch_idx % 50 == 0:
                     visualizer.visualize_validation_predictions(images, targets, outputs)
