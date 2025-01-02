@@ -149,6 +149,10 @@ class TrainingVisualizer:
         """生成Grad-CAM热力图"""
         self.model.eval()
 
+        # 确保模型参数可以计算梯度
+        for param in self.model.parameters():
+            param.requires_grad = True
+
         # 存储特征图的字典
         features = {}
         gradients = {}
@@ -171,6 +175,9 @@ class TrainingVisualizer:
         handle_feature = target_layer.register_forward_hook(save_feature_hook(target_layer))
         handle_gradient = target_layer.register_backward_hook(save_gradient_hook(target_layer))
 
+        # 确保输入也需要梯度
+        images = images.requires_grad_(True)
+
         # 前向传播
         outputs = self.model(images.to(self.device))
 
@@ -186,6 +193,7 @@ class TrainingVisualizer:
         one_hot = torch.zeros_like(outputs)
         for idx, target in enumerate(targets):
             one_hot[idx][target] = 1
+        one_hot = one_hot.to(self.device)
         outputs.backward(gradient=one_hot)
 
         # 生成热力图
@@ -204,6 +212,10 @@ class TrainingVisualizer:
         # 清除 hooks
         handle_feature.remove()
         handle_gradient.remove()
+
+        # 恢复模型的梯度设置
+        for param in self.model.parameters():
+            param.requires_grad = False
 
         return cam
 
