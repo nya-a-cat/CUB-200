@@ -145,6 +145,101 @@ class TrainingVisualizer:
                        f"Conf: {[f'{conf:.2f}' for conf in incorrect_conf.cpu().numpy()]}")
             self.visualize_batch(incorrect_images, None, phase="incorrect_predictions", caption=caption)
 
+    def generate_gradcam(self, images, targets, target_layer='layer4'):
+        """生成Grad-CAM热力图"""
+        self.model.eval()
+
+        # 存储特征图的字典
+        features = {}
+        gradients = {}
+
+        # 注册 hooks
+        def save_feature_hook(name):
+            def hook(module, input, output):
+                features[name] = output
+
+            return hook
+
+        def save_gradient_hook(name):
+            def hook(module, grad_in, grad_out):
+                gradients[name] = grad_out[0]
+
+            return hook
+
+        # 获取目标层
+        target_layer = dict([*self.model.named_modules()])[target_layer]
+        handle_feature = target_layer.register_forward_hook(save_feature_hook(target_layer))
+        handle_gradient = target_layer.register_backward_hook(save_gradient_hook(target_layer))
+
+        # 前向传播
+        outputs = self.model(images.to(self.device))
+
+        if targets is None:
+            # 如果没有提供目标，使用预测的类别
+            _, predicted = torch.max(outputs, 1)
+            targets = predicted
+
+        # 清除之前的梯度
+        self.model.zero_grad()
+
+        # 对目标类别的得分进行反向传播
+        one_hot = torch.zeros_like(outputs)
+        for idx, target in enumerate(targets):
+            one_hot[idx][target] = 1
+        outputs.backward(gradient=one_hot)
+
+        # 生成热力图
+        with torch.no_grad():
+            weights = torch.mean(gradients[target_layer], dim=(2, 3), keepdim=True)
+            activations = features[target_layer]
+            cam = torch.sum(weights * activations, dim=1, keepdim=True)
+            cam = F.relu(cam)  # ReLU激活
+
+            # 调整大小至原始图像尺寸
+            cam = F.interpolate(cam, size=(224, 224), mode='bilinear', align_corners=False)
+
+            # 归一化
+            cam = (cam - cam.min()) / (cam.max() - cam.min())
+
+        # 清除 hooks
+        handle_feature.remove()
+        handle_gradient.remove()
+
+        return cam
+
+    def visualize_attention(self, images, targets=None, phase="train"):
+        """可视化原始图像和对应的注意力热力图"""
+        # 生成热力图
+        attention_maps = self.generate_gradcam(images, targets)
+
+        # 准备可视化
+        batch_size = min(16, images.size(0))  # 最多显示16张图片
+        fig, axes = plt.subplots(batch_size, 3, figsize=(15, 5 * batch_size))
+
+        for idx in range(batch_size):
+            # 原始图像
+            img = self.denormalize(images[idx]).cpu().permute(1, 2, 0).numpy()
+            axes[idx, 0].imshow(img)
+            axes[idx, 0].set_title('Original Image')
+            axes[idx, 0].axis('off')
+
+            # 热力图
+            heatmap = attention_maps[idx].squeeze().cpu().numpy()
+            axes[idx, 1].imshow(heatmap, cmap='jet')
+            axes[idx, 1].set_title('Attention Map')
+            axes[idx, 1].axis('off')
+
+            # 叠加图
+            heatmap_colored = plt.cm.jet(heatmap)[:, :, :3]
+            superimposed = (img * 0.6 + heatmap_colored * 0.4)
+            axes[idx, 2].imshow(superimposed)
+            axes[idx, 2].set_title('Superimposed')
+            axes[idx, 2].axis('off')
+
+        plt.tight_layout()
+        wandb.log({f"{phase}_attention_maps": wandb.Image(plt)})
+        plt.close()
+
 
 def main():
     # 设备配置
@@ -224,6 +319,7 @@ def main():
             if batch_idx % 100 == 0:
                 visualizer.visualize_batch(images, targets, phase="train")
                 visualizer.visualize_network_flow(images, targets, phase="train")
+                visualizer.visualize_attention(images, targets, phase="train")  # 新增这行
 
             optimizer.zero_grad()
             outputs = model(images)
@@ -262,6 +358,7 @@ def main():
 
                 if batch_idx % 50 == 0:
                     visualizer.visualize_validation_predictions(images, targets, outputs)
+                    visualizer.visualize_attention(images, targets, phase="test")  # 新增这行
 
                 val_loss += loss.item()
                 _, predicted = outputs.max(1)
