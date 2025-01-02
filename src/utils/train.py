@@ -6,8 +6,8 @@ import sys
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 sys.path.append(project_root)
 
-import src.models.resnet50v2 as resnet50
-from src.data.writing_custom_datasets import CUB_200
+from ..models import resnet50v2
+from ..data.writing_custom_datasets import CUB_200
 from torch.utils.data import DataLoader
 from grams import Grams
 import torch
@@ -342,7 +342,7 @@ def main():
     )
 
     # Create model
-    model = resnet50.ResNet50()
+    model = resnet50v2.ResNet50()
     model = model.to(device)
 
     # Initialize visualizer
