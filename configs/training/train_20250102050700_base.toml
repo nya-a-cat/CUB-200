@@ -1,4 +1,4 @@
-# configs/training/train_20240102_base.toml
+# train_20250102050700_base.toml
 [training]
 run_name = "test"
 output_dir = "./results/base_20240102"
