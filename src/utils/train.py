@@ -1,7 +1,7 @@
 import sys
 import os
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-# 上面这行代码会将项目根目录添加到 Python 路径中
 
 from src.models import resnet50v2
 from src.data.writing_custom_datasets import CUB_200
@@ -30,303 +30,125 @@ class TrainingVisualizer:
                                  std=[1, 1, 1]),
         ])
 
-    def visualize_batch(self, images, targets, predictions=None, phase="train"):
-        """可视化一个batch的图像"""
-        # 反归一化图像
+    def visualize_batch(self, images, targets, predictions=None, phase="train", caption=None):
+        """可视化一个batch的图像，支持自定义标题"""
         images_cpu = self.denormalize(images.cpu())
-
-        # 创建图像网格
         grid = vutils.make_grid(images_cpu[:16], nrow=4, padding=2, normalize=True)
 
-        # 记录到wandb
-        caption = f"{phase.capitalize()} Batch Images"
-        if predictions is not None:
-            caption += f" (Pred: {predictions[:16].tolist()})"
+        if caption is None:
+            caption = f"{phase.capitalize()} Batch Images"
+            if predictions is not None:
+                caption += f" (Pred: {predictions[:16].tolist()})"
+
         wandb.log({
             f"{phase}_batch": wandb.Image(grid, caption=caption)
         })
 
-    def visualize_feature_maps(self, images, layer_name="layer4"):
-        """可视化特征图"""
+    def visualize_network_flow(self, images, targets, phase="train"):
+        """可视化网络流程和中间层特征图"""
         self.model.eval()
-        images = images.to(self.device)
-
-        # 获取特定层的特征图
         features = {}
 
-        def hook_fn(module, input, output):
-            features[layer_name] = output
+        # 定义要可视化的层
+        layers_to_viz = ['conv1', 'bn1', 'maxpool', 'layer1', 'layer2', 'layer3', 'layer4', 'avgpool', 'fc']
 
         # 注册钩子
+        handles = []
         for name, module in self.model.named_modules():
-            if name == layer_name:
-                handle = module.register_forward_hook(hook_fn)
+            if name in layers_to_viz:
+                handles.append(module.register_forward_hook(
+                    lambda m, i, o, name=name: features.update({name: o})
+                ))
 
+        # 前向传播
         with torch.no_grad():
-            _ = self.model(images)
+            outputs = self.model(images.to(self.device))
 
         # 移除钩子
-        handle.remove()
+        for handle in handles:
+            handle.remove()
 
-        # 可视化第一张图片的前16个通道
-        feature_maps = features[layer_name][0].cpu()
-        grid = vutils.make_grid(feature_maps[:16].unsqueeze(1), nrow=4, padding=2, normalize=True)
+        # 创建可视化图
+        batch_size = min(8, images.size(0))
+        fig = plt.figure(figsize=(20, 4 * batch_size))
 
-        wandb.log({
-            f"feature_maps_{layer_name}": wandb.Image(grid, caption=f"Feature Maps from {layer_name}")
-        })
+        for sample_idx in range(batch_size):
+            # 绘制输入图像
+            ax = plt.subplot(batch_size, len(layers_to_viz) + 1, sample_idx * (len(layers_to_viz) + 1) + 1)
+            img = self.denormalize(images[sample_idx]).cpu()
+            plt.imshow(img.permute(1, 2, 0))
+            if sample_idx == 0:
+                ax.set_title('Input')
+            ax.axis('off')
 
-    def visualize_loss_landscape(self, criterion, optimizer, num_points=20):
-        """可视化loss景观"""
-        original_params = [p.clone() for p in self.model.parameters()]
+            # 绘制中间层特征图
+            for layer_idx, layer_name in enumerate(layers_to_viz[:-1], 2):
+                ax = plt.subplot(batch_size, len(layers_to_viz) + 1,
+                                 sample_idx * (len(layers_to_viz) + 1) + layer_idx)
+                feature = features[layer_name][sample_idx].cpu()
 
-        # 获取一个batch的数据
-        images, targets = next(iter(self.train_loader))
-        images, targets = images.to(self.device), targets.to(self.device)
+                if layer_name == 'avgpool':
+                    feature = feature.squeeze()
+                    plt.imshow(feature.mean(0).unsqueeze(0), cmap='viridis')
+                else:
+                    plt.imshow(feature.mean(0), cmap='viridis')
 
-        # 在两个随机方向上采样
-        direction1 = [torch.randn_like(p) for p in original_params]
-        direction2 = [torch.randn_like(p) for p in original_params]
+                if sample_idx == 0:
+                    ax.set_title(layer_name)
+                ax.axis('off')
 
-        # 归一化方向向量
-        norm1 = torch.sqrt(sum((d ** 2).sum() for d in direction1))
-        norm2 = torch.sqrt(sum((d ** 2).sum() for d in direction2))
-        direction1 = [d / norm1 for d in direction1]
-        direction2 = [d / norm2 for d in direction2]
+            # 绘制输出预测
+            ax = plt.subplot(batch_size, len(layers_to_viz) + 1,
+                             (sample_idx + 1) * (len(layers_to_viz) + 1))
+            probs = F.softmax(outputs[sample_idx], dim=0)
+            top_k = torch.topk(probs, k=5)
+            plt.bar(range(5), top_k.values.cpu())
+            plt.xticks(range(5), [f'Class {i}' for i in top_k.indices.cpu()], rotation=45)
+            if sample_idx == 0:
+                ax.set_title('Predictions')
 
-        alpha = np.linspace(-1, 1, num_points)
-        beta = np.linspace(-1, 1, num_points)
-        losses = np.zeros((num_points, num_points))
-
-        for i, a in enumerate(alpha):
-            for j, b in enumerate(beta):
-                # 更新参数
-                for p, p0, d1, d2 in zip(self.model.parameters(), original_params, direction1, direction2):
-                    p.data = p0 + a * d1 + b * d2
-
-                outputs = self.model(images)
-                loss = criterion(outputs, targets)
-                losses[i, j] = loss.item()
-
-        # 恢复原始参数
-        for p, p0 in zip(self.model.parameters(), original_params):
-            p.data = p0
-
-        # 创建等高线图
-        fig, ax = plt.subplots()
-        cs = ax.contour(alpha, beta, losses)
-        ax.clabel(cs, inline=1, fontsize=10)
-        ax.set_title('Loss Landscape')
-        ax.set_xlabel('Direction 1')
-        ax.set_ylabel('Direction 2')
-
-        wandb.log({"loss_landscape": wandb.Image(plt)})
+        plt.tight_layout()
+        wandb.log({f"{phase}_network_flow": wandb.Image(plt)})
         plt.close()
 
     def visualize_validation_predictions(self, images, targets, outputs):
-        """可视化验证集预测结果"""
-        # 获取预测标签
-        _, predicted = outputs.max(1)
+        """可视化验证集预测结果，包括正确和错误的预测"""
+        probabilities = F.softmax(outputs, dim=1)
+        confidence, predicted = torch.max(probabilities, 1)
 
-        # 选择一些正确和错误的预测
         correct_mask = predicted == targets
         incorrect_mask = ~correct_mask
 
         # 可视化正确预测
         if correct_mask.any():
-            correct_images = images[correct_mask][:8]
-            correct_targets = targets[correct_mask][:8]
-            correct_preds = predicted[correct_mask][:8]
-            self.visualize_batch(correct_images, correct_targets, correct_preds, "correct_predictions")
+            correct_indices = torch.where(correct_mask)[0][:8]
+            correct_images = images[correct_indices]
+            correct_conf = confidence[correct_indices]
+
+            caption = (f"Correct Predictions\n"
+                       f"Confidence: {[f'{conf:.2f}' for conf in correct_conf.cpu().numpy()]}")
+            self.visualize_batch(correct_images, None, phase="correct_predictions", caption=caption)
 
         # 可视化错误预测
         if incorrect_mask.any():
-            incorrect_images = images[incorrect_mask][:8]
-            incorrect_targets = targets[incorrect_mask][:8]
-            incorrect_preds = predicted[incorrect_mask][:8]
-            self.visualize_batch(incorrect_images, incorrect_targets, incorrect_preds, "incorrect_predictions")
+            incorrect_indices = torch.where(incorrect_mask)[0][:8]
+            incorrect_images = images[incorrect_indices]
+            incorrect_targets = targets[incorrect_indices]
+            incorrect_preds = predicted[incorrect_indices]
+            incorrect_conf = confidence[incorrect_indices]
 
-    def visualize_grad_flow(self, named_parameters):
-        """可视化梯度流"""
-        ave_grads = []
-        layers = []
-
-        for n, p in named_parameters:
-            if p.requires_grad and "bias" not in n and p.grad is not None:
-                layers.append(n)
-                ave_grads.append(p.grad.abs().mean().cpu())
-
-        plt.figure(figsize=(10, 4))
-        plt.bar(np.arange(len(layers)), ave_grads)
-        plt.xticks(np.arange(len(layers)), layers, rotation=45)
-        plt.ylabel("average gradient")
-        plt.title("Gradient Flow")
-        plt.tight_layout()
-
-        wandb.log({"gradient_flow": wandb.Image(plt)})
-        plt.close()
-
-
-def update_train_loop(train_one_epoch, visualizer):
-    """更新训练循环，添加可视化"""
-
-    def train_with_vis(model, train_loader, criterion, optimizer, device):
-        model.train()
-        total_loss = 0
-        correct = 0
-        total = 0
-
-        for batch_idx, (images, targets) in enumerate(train_loader):
-            images, targets = images.to(device), targets.to(device)
-
-            # 可视化训练batch
-            if batch_idx % 100 == 0:
-                visualizer.visualize_batch(images, targets, phase="train")
-                visualizer.visualize_feature_maps(images)
-
-            optimizer.zero_grad()
-            outputs = model(images)
-            loss = criterion(outputs, targets)
-
-            loss.backward()
-
-            # 可视化梯度流
-            if batch_idx % 100 == 0:
-                visualizer.visualize_grad_flow(model.named_parameters())
-
-            optimizer.step()
-
-            total_loss += loss.item()
-            _, predicted = outputs.max(1)
-            total += targets.size(0)
-            correct += predicted.eq(targets).sum().item()
-
-            # 可视化loss景观
-            if batch_idx % 200 == 0:
-                visualizer.visualize_loss_landscape(criterion, optimizer)
-
-            if batch_idx % 100 == 0:
-                print(f'Batch: {batch_idx}/{len(train_loader)}, '
-                      f'Loss: {loss.item():.4f}, '
-                      f'Acc: {100. * correct / total:.2f}%')
-
-        return total_loss / len(train_loader), 100. * correct / total
-
-    return train_with_vis
-
-
-def update_validation_loop(validate, visualizer):
-    """更新验证循环，添加可视化"""
-
-    def validate_with_vis(model, test_loader, criterion, device):
-        model.eval()
-        total_loss = 0
-        correct = 0
-        total = 0
-
-        with torch.no_grad():
-            for batch_idx, (images, targets) in enumerate(test_loader):
-                images, targets = images.to(device), targets.to(device)
-                outputs = model(images)
-                loss = criterion(outputs, targets)
-
-                # 定期可视化验证结果
-                if batch_idx % 50 == 0:
-                    visualizer.visualize_validation_predictions(images, targets, outputs)
-
-                total_loss += loss.item()
-                _, predicted = outputs.max(1)
-                total += targets.size(0)
-                correct += predicted.eq(targets).sum().item()
-
-        return total_loss / len(test_loader), 100. * correct / total
-
-    return validate_with_vis
-
-
-# Training transforms
-train_transform = transforms.Compose([
-    transforms.RandomResizedCrop(224),
-    transforms.RandomHorizontalFlip(),
-    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
-    transforms.RandomRotation(degrees=10),
-    transforms.RandAugment(num_ops=2, magnitude=7),
-    transforms.ToTensor(),
-    # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    transforms.RandomErasing(p=0.2)
-])
-
-# Test transforms
-test_transform = transforms.Compose([
-    transforms.Resize(256),
-    transforms.CenterCrop(224),
-    transforms.ToTensor(),
-    # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-])
-
-# Datasets
-train_dataset = CUB_200(root='CUB-200', download=True, train=True, transform=train_transform)
-test_dataset = CUB_200(root='CUB-200', download=True, train=False, transform=test_transform)
-
-# DataLoaders
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=4, pin_memory=True)
-test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False, num_workers=4, pin_memory=True)
-
-
-def train_one_epoch(model, train_loader, criterion, optimizer, device):
-    model.train()
-    total_loss = 0
-    correct = 0
-    total = 0
-
-    for batch_idx, (images, targets) in enumerate(train_loader):
-        images, targets = images.to(device), targets.to(device)
-
-        optimizer.zero_grad()
-        outputs = model(images)
-        loss = criterion(outputs, targets)
-
-        loss.backward()
-        optimizer.step()
-
-        total_loss += loss.item()
-        _, predicted = outputs.max(1)
-        total += targets.size(0)
-        correct += predicted.eq(targets).sum().item()
-
-        if batch_idx % 100 == 0:
-            print(f'Batch: {batch_idx}/{len(train_loader)}, '
-                  f'Loss: {loss.item():.4f}, '
-                  f'Acc: {100. * correct / total:.2f}%')
-
-    return total_loss / len(train_loader), 100. * correct / total
-
-
-def validate(model, test_loader, criterion, device):
-    model.eval()
-    total_loss = 0
-    correct = 0
-    total = 0
-
-    with torch.no_grad():
-        for images, targets in test_loader:
-            images, targets = images.to(device), targets.to(device)
-            outputs = model(images)
-            loss = criterion(outputs, targets)
-
-            total_loss += loss.item()
-            _, predicted = outputs.max(1)
-            total += targets.size(0)
-            correct += predicted.eq(targets).sum().item()
-
-    return total_loss / len(test_loader), 100. * correct / total
+            caption = (f"Incorrect Predictions\n"
+                       f"True: {incorrect_targets.cpu().numpy()}\n"
+                       f"Pred: {incorrect_preds.cpu().numpy()}\n"
+                       f"Conf: {[f'{conf:.2f}' for conf in incorrect_conf.cpu().numpy()]}")
+            self.visualize_batch(incorrect_images, None, phase="incorrect_predictions", caption=caption)
 
 
 def main():
-    # Set device
+    # 设备配置
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    # Initialize wandb
+    # 初始化wandb
     wandb.init(
         project="CUB-200-Classification",
         config={
@@ -338,47 +160,100 @@ def main():
         }
     )
 
-    # Create model
+    # 数据转换
+    train_transform = transforms.Compose([
+        transforms.RandomResizedCrop(224),
+        transforms.RandomHorizontalFlip(),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+        transforms.RandomRotation(degrees=10),
+        transforms.RandAugment(num_ops=2, magnitude=7),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        transforms.RandomErasing(p=0.2)
+    ])
+
+    test_transform = transforms.Compose([
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+
+    # 数据加载
+    train_dataset = CUB_200(root='CUB-200', download=True, train=True, transform=train_transform)
+    test_dataset = CUB_200(root='CUB-200', download=True, train=False, transform=test_transform)
+
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=4, pin_memory=True)
+    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False, num_workers=4, pin_memory=True)
+
+    # 模型初始化
     model = resnet50v2.ResNet50()
     model = model.to(device)
 
-    # Initialize visualizer
+    # 初始化可视化器
     visualizer = TrainingVisualizer(model, train_loader, test_loader, device)
 
-    # Loss function
+    # 损失函数和优化器
     criterion = nn.CrossEntropyLoss()
-
-    # Optimizer
-    optimizer = Grams(
-        model.parameters(),
-        lr=1e-3,
-        weight_decay=0.0
-    )
-
-    # Learning rate scheduler
+    optimizer = Grams(model.parameters(), lr=1e-3)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100)
 
-    # Update training and validation functions with visualization
-    train_one_epoch_vis = update_train_loop(train_one_epoch, visualizer)
-    validate_vis = update_validation_loop(validate, visualizer)
-
-    # Training loop
+    # 训练循环
     best_acc = 0
     for epoch in range(100):
-        print(f'\nEpoch: {epoch + 1}')
+        model.train()
+        train_loss = 0
+        train_correct = 0
+        train_total = 0
 
-        # Train with visualization
-        train_loss, train_acc = train_one_epoch_vis(
-            model, train_loader, criterion, optimizer, device)
+        for batch_idx, (images, targets) in enumerate(train_loader):
+            images, targets = images.to(device), targets.to(device)
 
-        # Validate with visualization
-        val_loss, val_acc = validate_vis(
-            model, test_loader, criterion, device)
+            if batch_idx % 100 == 0:
+                visualizer.visualize_batch(images, targets, phase="train")
+                visualizer.visualize_network_flow(images, targets, phase="train")
 
-        # Update learning rate
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = criterion(outputs, targets)
+            loss.backward()
+            optimizer.step()
+
+            train_loss += loss.item()
+            _, predicted = outputs.max(1)
+            train_total += targets.size(0)
+            train_correct += predicted.eq(targets).sum().item()
+
+        # 验证
+        model.eval()
+        val_loss = 0
+        val_correct = 0
+        val_total = 0
+
+        with torch.no_grad():
+            for batch_idx, (images, targets) in enumerate(test_loader):
+                images, targets = images.to(device), targets.to(device)
+                outputs = model(images)
+                loss = criterion(outputs, targets)
+
+                if batch_idx % 50 == 0:
+                    visualizer.visualize_validation_predictions(images, targets, outputs)
+
+                val_loss += loss.item()
+                _, predicted = outputs.max(1)
+                val_total += targets.size(0)
+                val_correct += predicted.eq(targets).sum().item()
+
+        # 更新学习率
         scheduler.step()
 
-        # Log metrics
+        # 计算指标
+        train_loss = train_loss / len(train_loader)
+        train_acc = 100. * train_correct / train_total
+        val_loss = val_loss / len(test_loader)
+        val_acc = 100. * val_correct / val_total
+
+        # 记录到wandb
         wandb.log({
             "train_loss": train_loss,
             "train_acc": train_acc,
@@ -387,12 +262,13 @@ def main():
             "learning_rate": scheduler.get_last_lr()[0]
         })
 
-        # Save best model
+        # 保存最佳模型
         if val_acc > best_acc:
             best_acc = val_acc
             torch.save(model.state_dict(), 'best_model.pth')
             print(f'Saved best model with accuracy: {best_acc:.2f}%')
 
+        print(f'Epoch: {epoch + 1}')
         print(f'Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}%')
         print(f'Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.2f}%')
 
