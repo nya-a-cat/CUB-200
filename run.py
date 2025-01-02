@@ -10,7 +10,8 @@ import torchvision.transforms as transforms
 from transformers import Trainer, TrainingArguments, EarlyStoppingCallback
 import wandb
 from dataclasses import dataclass
-import src.models.resnet50 as resnet50
+# import src.models.resnet50 as resnet50
+import src.models.resnet50v2 as resnet50
 from src.data.writing_custom_datasets import CUB_200
 import torchvision.transforms as transforms
 import ast
