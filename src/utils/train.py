@@ -1,3 +1,11 @@
+# 在 src/utils/train.py 中修改导入语句
+import os
+import sys
+
+# 将项目根目录添加到 Python 路径
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+sys.path.append(project_root)
+
 import src.models.resnet50v2 as resnet50
 from src.data.writing_custom_datasets import CUB_200
 from torch.utils.data import DataLoader
