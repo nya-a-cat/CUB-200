@@ -326,7 +326,7 @@ def main():
     # Train the model
     try:
         # trainer.train(resume_from_checkpoint=True)
-        trainer.train(resume_from_checkpoint=True)
+        trainer.train()
 
         # Save the final model
         final_model_path = Path(training_config['training']['output_dir']) / 'final_model'
