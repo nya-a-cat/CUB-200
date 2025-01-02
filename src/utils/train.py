@@ -88,9 +88,11 @@ class TrainingVisualizer:
                 feature = features[layer_name][sample_idx].cpu()
 
                 if layer_name == 'avgpool':
-                    feature = feature.squeeze()
-                    plt.imshow(feature.mean(0).unsqueeze(0), cmap='viridis')
+                    # 修改这里的处理方式，确保特征图是2D的
+                    feature = feature.view(1, -1)  # 重塑为2D
+                    plt.imshow(feature, cmap='viridis')
                 else:
+                    # 对于其他层，保持原来的处理方式
                     plt.imshow(feature.mean(0), cmap='viridis')
 
                 if sample_idx == 0:
