@@ -29,22 +29,21 @@ project = "CUB-200-Classification"
 run_name = "ResNet50-base"
 
 [transform]
-# 第一阶段
 train_transform = [
     "RandomResizedCrop(224)",
     "RandomHorizontalFlip(p=0.5)",
     "ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2)",
     "ToTensor()",
     "Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])"
-]
-
-# 如果效果好，再添加
-train_transform += [
     "RandomRotation(degrees=10)",
-    "RandomErasing(p=0.2)"
+    "RandomErasing(p=0.2)",
+    "RandAugment(num_ops=2, magnitude=7)"
+
 ]
 
-# 最后可以尝试添加
-train_transform += [
-    "RandAugment(num_ops=2, magnitude=7)"
+test_transform = [
+    "Resize(256)",
+    "CenterCrop(224)",
+    "ToTensor()",
+    "Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])"
 ]
