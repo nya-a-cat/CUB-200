@@ -156,7 +156,7 @@ def main():
         config={
             "learning_rate": 1e-3,
             "epochs": 100,
-            "batch_size": 32,
+            "batch_size": 100,
             "architecture": "ResNet50v2",
             "dataset": "CUB-200"
         }
@@ -195,8 +195,8 @@ def main():
     train_dataset = CUB_200(root='CUB-200', download=True, train=True, transform=train_transform)
     test_dataset = CUB_200(root='CUB-200', download=True, train=False, transform=test_transform)
 
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=4, pin_memory=True)
-    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False, num_workers=4, pin_memory=True)
+    train_loader = DataLoader(train_dataset, batch_size=100, shuffle=True, num_workers=4, pin_memory=True)
+    test_loader = DataLoader(test_dataset, batch_size=100, shuffle=False, num_workers=4, pin_memory=True)
 
     # 模型初始化
     model = resnet50v2.ResNet50()
