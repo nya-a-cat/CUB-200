@@ -219,37 +219,35 @@ class TrainingVisualizer:
 
         return cam
 
-    def visualize_attention(self, images, targets=None, phase="train"):
-        """可视化原始图像和对应的注意力热力图"""
-        # 生成热力图
+    def visualize_attention(self, images, targets, phase="train"):
+        """可视化注意力热力图"""
         attention_maps = self.generate_gradcam(images, targets)
 
-        # 准备可视化
-        batch_size = min(16, images.size(0))  # 最多显示16张图片
-        fig, axes = plt.subplots(batch_size, 3, figsize=(15, 5 * batch_size))
+        fig, axes = plt.subplots(4, 4, figsize=(20, 20))
+        for idx in range(min(16, len(images))):
+            i, j = idx // 4, idx % 4
 
-        for idx in range(batch_size):
-            # 原始图像
-            img = self.denormalize(images[idx]).cpu().permute(1, 2, 0).numpy()
-            axes[idx, 0].imshow(img)
-            axes[idx, 0].set_title('Original Image')
-            axes[idx, 0].axis('off')
+            # 使用 detach() 分离梯度
+            img = self.denormalize(images[idx]).cpu().detach().permute(1, 2, 0).numpy()
+            attention = attention_maps[idx, 0].cpu().detach().numpy()
 
-            # 热力图
-            heatmap = attention_maps[idx].squeeze().cpu().numpy()
-            axes[idx, 1].imshow(heatmap, cmap='jet')
-            axes[idx, 1].set_title('Attention Map')
-            axes[idx, 1].axis('off')
+            # 显示原始图像
+            axes[i, j].imshow(img)
 
-            # 叠加图
-            heatmap_colored = plt.cm.jet(heatmap)[:, :, :3]
-            superimposed = (img * 0.6 + heatmap_colored * 0.4)
-            axes[idx, 2].imshow(superimposed)
-            axes[idx, 2].set_title('Superimposed')
-            axes[idx, 2].axis('off')
+            # 叠加热力图
+            heatmap = cv2.applyColorMap(np.uint8(255 * attention), cv2.COLORMAP_JET)
+            heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+            heatmap = cv2.resize(heatmap, (img.shape[1], img.shape[0]))
+
+            # 将热力图叠加到原始图像上
+            superimposed = cv2.addWeighted(np.uint8(255 * img), 0.6, heatmap, 0.4, 0)
+            axes[i, j].imshow(superimposed / 255.0)
+
+            axes[i, j].axis('off')
+            axes[i, j].set_title(f'Class {targets[idx].item()}')
 
         plt.tight_layout()
-        wandb.log({f"{phase}_attention_maps": wandb.Image(plt)})
+        wandb.log({f"attention_maps_{phase}": wandb.Image(plt)})
         plt.close()
 
 
