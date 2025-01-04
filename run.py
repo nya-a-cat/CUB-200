@@ -5,12 +5,13 @@ import torchvision.transforms as transforms
 import torch.utils.data
 from tqdm import tqdm
 import torch
+import time  # 添加time模块导入
 
 # data processing
 # transform
 train_transform = transforms.Compose([
-    transforms.Resize((256, 256)),  # 将所有图片调整为 256x256
-    transforms.ToTensor(),  # 转换为张量
+    transforms.Resize((256, 256)),
+    transforms.ToTensor(),
 ])
 test_transform = transforms.Compose([
     transforms.Resize((256, 256)),
@@ -19,6 +20,39 @@ test_transform = transforms.Compose([
 
 train_data = CUB_200(root='CUB-200', download=True, transform=train_transform)
 test_data = CUB_200(root='CUB-200', download=True, transform=test_transform)
+
+# 预加载数据到GPU
+print("Preloading training data to GPU...")
+start_time = time.time()
+# 确保所有数据都加载到GPU
+all_train_images = []
+all_train_labels = []
+for images, labels in tqdm(train_data):
+    if isinstance(images, torch.Tensor):
+        all_train_images.append(images.cuda())
+    else:
+        all_train_images.append(torch.tensor(images).cuda())
+    all_train_labels.append(torch.tensor(labels).cuda())
+train_data.images = torch.stack(all_train_images)
+train_data.labels = torch.stack(all_train_labels)
+print(f"Training data preloaded in {time.time() - start_time:.2f} seconds")
+
+print("Preloading test data to GPU...")
+start_time = time.time()
+all_test_images = []
+all_test_labels = []
+for images, labels in tqdm(test_data):
+    if isinstance(images, torch.Tensor):
+        all_test_images.append(images.cuda())
+    else:
+        all_test_images.append(torch.tensor(images).cuda())
+    all_test_labels.append(torch.tensor(labels).cuda())
+test_data.images = torch.stack(all_test_images)
+test_data.labels = torch.stack(all_test_labels)
+print(f"Test data preloaded in {time.time() - start_time:.2f} seconds")
+
+# 其余代码保持不变...
+
 
 train_loader = torch.utils.data.DataLoader(train_data, batch_size=32, shuffle=True, num_workers=5, prefetch_factor=2)
 test_loader = torch.utils.data.DataLoader(test_data, batch_size=32, shuffle=False, num_workers=5, prefetch_factor=2)

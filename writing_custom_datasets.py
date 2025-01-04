@@ -261,6 +261,27 @@ class CUB_200(VisionDataset):
         Returns:
             tuple: (image, target) where target is index of the target class
         """
+        # 如果数据已预加载到GPU，直接返回
+        if hasattr(self, 'images') and hasattr(self, 'labels'):
+            sample = (self.images[index], self.labels[index])
+
+            # 处理额外信息
+            extra_info = {}
+            if self.load_bbox:
+                image_id = self.filtered_info.index[index]
+                extra_info['bbox'] = self.bbox_info[image_id]
+            if self.load_parts:
+                image_id = self.filtered_info.index[index]
+                extra_info['parts'] = self.parts_info[image_id]
+            if self.load_attributes:
+                image_id = self.filtered_info.index[index]
+                extra_info['attributes'] = self.attributes_info[image_id]
+
+            if extra_info:
+                sample = sample + (extra_info,)
+
+            return sample
+
         image_id = self.filtered_info.index[index]
         img_path = self.root / self.base_folder / "images" / self.filtered_paths[index]
         target = self.targets[index]
