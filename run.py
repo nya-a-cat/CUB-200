@@ -27,6 +27,7 @@ test_loader = torch.utils.data.DataLoader(test_data, batch_size=32, shuffle=Fals
 criterion = torch.nn.CrossEntropyLoss()
 model = models.resnet50(weights=None)
 optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+model.fc = torch.nn.Linear(model.fc.in_features, 200)
 
 # gpu
 train_on_gpu = torch.cuda.is_available()
@@ -102,11 +103,7 @@ for epoch in tqdm(range(100)):
         # calculate average validation loss
         avg_valid_loss = running_valid_loss / valid_batch_count
         valid_losses.append(avg_valid_loss)
-
-        # Save model if validation loss has decreased
-        if avg_valid_loss < best_val_loss:
-            best_val_loss = avg_valid_loss
-            torch.save(model.state_dict(), 'best_model.pth')
+        print(avg_valid_loss)
 
     # print training/validation statistics
     print(f'Epoch: {epoch + 1} \tTraining Loss: {avg_train_loss:.6f} \tValidation Loss: {avg_valid_loss:.6f}')
