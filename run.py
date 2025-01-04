@@ -38,6 +38,8 @@ best_val_loss = float('inf')
 train_losses = []
 valid_losses = []
 
+print('test')
+
 # forward and backward
 for epoch in tqdm(range(100)):
     # Train mode
