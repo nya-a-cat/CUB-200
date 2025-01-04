@@ -91,6 +91,7 @@ for epoch in tqdm(range(100)):
 
             # calculate the batch loss
             loss = criterion(output, batch_labels)
+            print(loss.item())
 
             # update running validation loss
             running_valid_loss += loss.item()
