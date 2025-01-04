@@ -10,12 +10,15 @@ import time  # 添加time模块导入
 # data processing
 # transform
 train_transform = transforms.Compose([
-    transforms.Resize((256, 256)),
+    transforms.Resize(256),
     transforms.ToTensor(),
+    transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+    transforms.RandomRotation(10),
 ])
 test_transform = transforms.Compose([
-    transforms.Resize((256, 256)),
+    transforms.Resize(256),
     transforms.ToTensor(),
+    transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
 ])
 
 train_data = CUB_200(root='CUB-200', download=True, transform=train_transform)
@@ -52,14 +55,16 @@ test_data = CUB_200(root='CUB-200', download=True, transform=test_transform)
 # print(f"Test data preloaded in {time.time() - start_time:.2f} seconds")
 
 
-train_loader = torch.utils.data.DataLoader(train_data, batch_size=32, shuffle=True, num_workers=8, prefetch_factor=2)
-test_loader = torch.utils.data.DataLoader(test_data, batch_size=32, shuffle=False, num_workers=8, prefetch_factor=2)
+train_loader = torch.utils.data.DataLoader(train_data, batch_size=200, shuffle=True, num_workers=8, prefetch_factor=2)
+test_loader = torch.utils.data.DataLoader(test_data, batch_size=200, shuffle=False, num_workers=8, prefetch_factor=2)
 
 # model define
 criterion = torch.nn.CrossEntropyLoss()
 model = models.resnet50(weights=None)
-optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+# optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+optimizer = torch.optim.adamw(model.parameters(), lr=0.001)
 model.fc = torch.nn.Linear(model.fc.in_features, 200)
+
 
 # gpu
 train_on_gpu = torch.cuda.is_available()
