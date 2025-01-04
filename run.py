@@ -54,8 +54,8 @@ print(f"Test data preloaded in {time.time() - start_time:.2f} seconds")
 # 其余代码保持不变...
 
 
-train_loader = torch.utils.data.DataLoader(train_data, batch_size=32, shuffle=True, num_workers=0, prefetch_factor=2)
-test_loader = torch.utils.data.DataLoader(test_data, batch_size=32, shuffle=False, num_workers=0, prefetch_factor=2)
+train_loader = torch.utils.data.DataLoader(train_data, batch_size=32, shuffle=True, num_workers=0, prefetch_factor=None)
+test_loader = torch.utils.data.DataLoader(test_data, batch_size=32, shuffle=False, num_workers=0, prefetch_factor=None)
 
 # model define
 criterion = torch.nn.CrossEntropyLoss()
