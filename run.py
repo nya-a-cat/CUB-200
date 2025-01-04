@@ -41,6 +41,33 @@ valid_losses = []
 
 print('test')
 
+
+def validate(model, test_loader, train_on_gpu=True):
+    # 初始化计数器
+    valid_total = 0
+    valid_correct = 0
+
+    model.eval()  # 设置为评估模式
+
+    with torch.no_grad():
+        for batch_images, batch_labels in test_loader:
+            if train_on_gpu:
+                batch_images = batch_images.cuda()
+                batch_labels = batch_labels.cuda()
+
+            output = model(batch_images)
+
+            # Calculate accuracy
+            _, predicted = torch.max(output.data, 1)
+            valid_total += batch_labels.size(0)
+            valid_correct += (predicted == batch_labels).sum().item()
+
+        # Calculate validation accuracy
+        valid_accuracy = 100 * valid_correct / valid_total
+
+        return valid_accuracy
+
+
 # forward and backward
 for epoch in tqdm(range(100)):
     # Train mode
@@ -79,21 +106,9 @@ for epoch in tqdm(range(100)):
     running_valid_loss = 0.0
     valid_batch_count = 0
 
-    with torch.no_grad():
-        for batch_images, batch_labels in test_loader:
-            if train_on_gpu:
-                batch_images, batch_labels = batch_images.cuda(), batch_labels.cuda()
-
-            output = model(batch_images)
-
-            # Calculate accuracy
-            _, predicted = torch.max(output.data, 1)
-            valid_total += batch_labels.size(0)
-            valid_correct += (predicted == batch_labels).sum().item()
-
-        # Calculate validation accuracy
-        valid_accuracy = 100 * valid_correct / valid_total
+    accuracy = validate(model, test_loader, train_on_gpu=True)
+    print(f'Validation Accuracy: {accuracy:.2f}%')
 
     # print training/validation statistics
-    print(f'Epoch: {epoch + 1} \tTraining Loss: {avg_train_loss:.6f} \tacc: {valid_accuracy:.6f}')
+    print(f'Epoch: {epoch + 1} \tTraining Loss: {avg_train_loss:.6f} ')
 
