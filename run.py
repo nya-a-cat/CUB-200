@@ -10,13 +10,13 @@ import time  # 添加time模块导入
 # data processing
 # transform
 train_transform = transforms.Compose([
-    transforms.Resize(256),
+    transforms.Resize((256, 256)),
     transforms.ToTensor(),
     transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
     transforms.RandomRotation(10),
 ])
 test_transform = transforms.Compose([
-    transforms.Resize(256),
+    transforms.Resize((256, 256)),
     transforms.ToTensor(),
     transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
 ])
