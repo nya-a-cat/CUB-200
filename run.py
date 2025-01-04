@@ -49,9 +49,8 @@ for epoch in tqdm(range(100)):
 
     for batch_images, batch_labels in train_loader:
         # move tensors to GPU if CUDA is available
-        # if train_on_gpu:
-        #     batch_images, batch_labels = batch_images.cuda(), batch_labels.cuda()
-        #疑似花很多时间数据加载
+        if train_on_gpu:
+            batch_images, batch_labels = batch_images.cuda(), batch_labels.cuda()
 
         # 清零梯度
         optimizer.zero_grad()
