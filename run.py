@@ -75,36 +75,25 @@ for epoch in tqdm(range(100)):
     # Calculate average training loss for this epoch
     avg_train_loss = running_train_loss / train_batch_count
     train_losses.append(avg_train_loss)
-
-    ######################
-    # validate the model #
-    ######################
     model.eval()
     running_valid_loss = 0.0
     valid_batch_count = 0
 
     with torch.no_grad():
         for batch_images, batch_labels in test_loader:
-            # move tensors to GPU if CUDA is available
             if train_on_gpu:
                 batch_images, batch_labels = batch_images.cuda(), batch_labels.cuda()
 
-            # forward pass: compute predicted outputs by passing inputs to the model
             output = model(batch_images)
 
-            # calculate the batch loss
-            loss = criterion(output, batch_labels)
-            print(loss.item())
+            # Calculate accuracy
+            _, predicted = torch.max(output.data, 1)
+            valid_total += batch_labels.size(0)
+            valid_correct += (predicted == batch_labels).sum().item()
 
-            # update running validation loss
-            running_valid_loss += loss.item()
-            valid_batch_count += 1
-
-        # calculate average validation loss
-        avg_valid_loss = running_valid_loss / valid_batch_count
-        valid_losses.append(avg_valid_loss)
-        print(avg_valid_loss)
+        # Calculate validation accuracy
+        valid_accuracy = 100 * valid_correct / valid_total
 
     # print training/validation statistics
-    print(f'Epoch: {epoch + 1} \tTraining Loss: {avg_train_loss:.6f} \tValidation Loss: {avg_valid_loss:.6f}')
+    print(f'Epoch: {epoch + 1} \tTraining Loss: {avg_train_loss:.6f} \tacc: {valid_accuracy:.6f}')
 
