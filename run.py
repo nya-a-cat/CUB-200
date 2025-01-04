@@ -20,8 +20,8 @@ test_transform = transforms.Compose([
 train_data = CUB_200(root='CUB-200', download=True, transform=train_transform)
 test_data = CUB_200(root='CUB-200', download=True, transform=test_transform)
 
-train_loader = torch.utils.data.DataLoader(train_data, batch_size=32, shuffle=True)
-test_loader = torch.utils.data.DataLoader(test_data, batch_size=64, shuffle=True)
+train_loader = torch.utils.data.DataLoader(train_data, batch_size=32, shuffle=True, num_workers=5, prefetch_factor=2)
+test_loader = torch.utils.data.DataLoader(test_data, batch_size=32, shuffle=False, num_workers=5, prefetch_factor=2)
 
 # model define
 criterion = torch.nn.CrossEntropyLoss()
@@ -49,8 +49,9 @@ for epoch in tqdm(range(100)):
 
     for batch_images, batch_labels in train_loader:
         # move tensors to GPU if CUDA is available
-        if train_on_gpu:
-            batch_images, batch_labels = batch_images.cuda(), batch_labels.cuda()
+        # if train_on_gpu:
+        #     batch_images, batch_labels = batch_images.cuda(), batch_labels.cuda()
+        #疑似花很多时间数据加载
 
         # 清零梯度
         optimizer.zero_grad()
