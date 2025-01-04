@@ -106,7 +106,7 @@ def validate(model, test_loader, train_on_gpu=True):
 
 
 # forward and backward
-for epoch in tqdm(range(100)):
+for epoch in tqdm(range(10000)):
     # Train mode
     model.train()
     running_train_loss = 0.0
