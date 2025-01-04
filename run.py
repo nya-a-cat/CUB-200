@@ -62,7 +62,7 @@ test_loader = torch.utils.data.DataLoader(test_data, batch_size=200, shuffle=Fal
 criterion = torch.nn.CrossEntropyLoss()
 model = models.resnet50(weights=None)
 # optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-optimizer = torch.optim.adam.Adam(model.parameters(), lr=0.001)
+optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
 model.fc = torch.nn.Linear(model.fc.in_features, 200)
 
 
