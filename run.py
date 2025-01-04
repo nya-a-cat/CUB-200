@@ -5,10 +5,10 @@ import torchvision.transforms as transforms
 import torch.utils.data
 from tqdm import tqdm
 import torch
-import time  # 添加time模块导入
+import time
+import os
 
-# data processing
-# transform
+# Data processing code remains the same
 train_transform = transforms.Compose([
     transforms.Resize((256, 256)),
     transforms.ToTensor(),
@@ -24,67 +24,26 @@ test_transform = transforms.Compose([
 train_data = CUB_200(root='CUB-200', download=True, transform=train_transform)
 test_data = CUB_200(root='CUB-200', download=True, transform=test_transform)
 
-# # 预加载数据到GPU
-# print("Preloading training data to GPU...")
-# start_time = time.time()
-# # 确保所有数据都加载到GPU
-# all_train_images = []
-# all_train_labels = []
-# for images, labels in tqdm(train_data):
-#     if isinstance(images, torch.Tensor):
-#         all_train_images.append(images.cuda())
-#     else:
-#         all_train_images.append(torch.tensor(images).cuda())
-#     all_train_labels.append(torch.tensor(labels).cuda())
-# train_data.images = torch.stack(all_train_images)
-# train_data.labels = torch.stack(all_train_labels)
-# print(f"Training data preloaded in {time.time() - start_time:.2f} seconds")
-#
-# print("Preloading test data to GPU...")
-# start_time = time.time()
-# all_test_images = []
-# all_test_labels = []
-# for images, labels in tqdm(test_data):
-#     if isinstance(images, torch.Tensor):
-#         all_test_images.append(images.cuda())
-#     else:
-#         all_test_images.append(torch.tensor(images).cuda())
-#     all_test_labels.append(torch.tensor(labels).cuda())
-# test_data.images = torch.stack(all_test_images)
-# test_data.labels = torch.stack(all_test_labels)
-# print(f"Test data preloaded in {time.time() - start_time:.2f} seconds")
-
-
 train_loader = torch.utils.data.DataLoader(train_data, batch_size=200, shuffle=True, num_workers=8, prefetch_factor=2)
 test_loader = torch.utils.data.DataLoader(test_data, batch_size=200, shuffle=False, num_workers=8, prefetch_factor=2)
 
-# model define
+# Model definition
 criterion = torch.nn.CrossEntropyLoss()
 model = models.resnet50(weights=None)
-# optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
 optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
 model.fc = torch.nn.Linear(model.fc.in_features, 200)
 
-
-# gpu
+# GPU setup
 train_on_gpu = torch.cuda.is_available()
 if train_on_gpu:
     model.cuda()
 
-# Initialize variables to track best model performance
-best_val_loss = float('inf')
-train_losses = []
-valid_losses = []
 
-print('test')
-
-
-def validate(model, test_loader, train_on_gpu=True):
-    # 初始化计数器
+def validate(model, test_loader, criterion, train_on_gpu=True):
+    model.eval()
+    valid_loss = 0.0
     valid_total = 0
     valid_correct = 0
-
-    model.eval()  # 设置为评估模式
 
     with torch.no_grad():
         for batch_images, batch_labels in test_loader:
@@ -93,59 +52,85 @@ def validate(model, test_loader, train_on_gpu=True):
                 batch_labels = batch_labels.cuda()
 
             output = model(batch_images)
+            loss = criterion(output, batch_labels)
+            valid_loss += loss.item()
 
-            # Calculate accuracy
             _, predicted = torch.max(output.data, 1)
             valid_total += batch_labels.size(0)
             valid_correct += (predicted == batch_labels).sum().item()
 
-        # Calculate validation accuracy
+        avg_valid_loss = valid_loss / len(test_loader)
         valid_accuracy = 100 * valid_correct / valid_total
 
-        return valid_accuracy
+        return avg_valid_loss, valid_accuracy
 
 
-# forward and backward
+# Early stopping parameters
+patience = 10  # Number of epochs to wait for improvement
+min_improvement = 0.01  # Minimum improvement required (1%)
+best_valid_loss = float('inf')
+patience_counter = 0
+best_accuracy = 0.0
+
+# Create directory for saving models
+os.makedirs('model_checkpoints', exist_ok=True)
+
+# Training loop
 for epoch in tqdm(range(10000)):
     # Train mode
     model.train()
     running_train_loss = 0.0
     train_batch_count = 0
 
-    for batch_images, batch_labels in train_loader:
-        # move tensors to GPU if CUDA is available
+    for batch_images, batch_labels in tqdm(train_loader):
         if train_on_gpu:
             batch_images, batch_labels = batch_images.cuda(), batch_labels.cuda()
 
-        # 清零梯度
         optimizer.zero_grad()
-
-        # 前向传播
         outputs = model(batch_images)
-
-        # 计算损失
         loss = criterion(outputs, batch_labels)
-
-        # 累加训练损失
         running_train_loss += loss.item()
         train_batch_count += 1
-
-        # 反向传播
         loss.backward()
-
-        # 更新模型参数
         optimizer.step()
 
-    # Calculate average training loss for this epoch
+    # Calculate average training loss
     avg_train_loss = running_train_loss / train_batch_count
-    train_losses.append(avg_train_loss)
-    model.eval()
-    running_valid_loss = 0.0
-    valid_batch_count = 0
 
-    accuracy = validate(model, test_loader, train_on_gpu=True)
-    print(f'Validation Accuracy: {accuracy:.2f}%')
+    # Validation phase
+    valid_loss, accuracy = validate(model, test_loader, criterion, train_on_gpu)
 
-    # print training/validation statistics
-    print(f'Epoch: {epoch + 1} \tTraining Loss: {avg_train_loss:.6f} ')
+    # Print statistics
+    print(
+        f'Epoch: {epoch + 1} \tTraining Loss: {avg_train_loss:.6f} \tValidation Loss: {valid_loss:.6f} \tAccuracy: {accuracy:.2f}%')
+
+    # Early stopping check
+    if valid_loss < best_valid_loss * (1 - min_improvement):
+        # We found a better model
+        best_valid_loss = valid_loss
+        patience_counter = 0
+
+        # Save the best model
+        if accuracy > best_accuracy:
+            best_accuracy = accuracy
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'valid_loss': valid_loss,
+                'accuracy': accuracy,
+            }, f'model_checkpoints/best_model.pth')
+            print(f'Saved new best model with accuracy: {accuracy:.2f}%')
+    else:
+        patience_counter += 1
+
+    # Check if we should stop training
+    if patience_counter >= patience:
+        print(f'Early stopping triggered after {epoch + 1} epochs')
+        break
+
+# Load the best model after training
+checkpoint = torch.load('model_checkpoints/best_model.pth')
+model.load_state_dict(checkpoint['model_state_dict'])
+print(f"Loaded best model from epoch {checkpoint['epoch']} with accuracy: {checkpoint['accuracy']:.2f}%")
 
