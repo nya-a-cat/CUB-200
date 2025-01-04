@@ -13,7 +13,7 @@ train_transform = transforms.Compose([
     transforms.ToTensor(),  # 转换为张量
 ])
 test_transform = transforms.Compose([
-    transforms.Resize(256),
+    transforms.Resize((256, 256)),
     transforms.ToTensor(),
 ])
 
