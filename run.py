@@ -14,6 +14,9 @@ train_transform = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
     transforms.RandomRotation(10),
+    transforms.RandomCrop(10),
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomVerticalFlip(),
 ])
 test_transform = transforms.Compose([
     transforms.Resize((256, 256)),
@@ -25,7 +28,7 @@ train_data = CUB_200(root='CUB-200', download=True, transform=train_transform, t
 test_data = CUB_200(root='CUB-200', download=True, transform=test_transform, train=False)
 
 train_loader = torch.utils.data.DataLoader(train_data, batch_size=200, shuffle=True, num_workers=8, prefetch_factor=2)
-test_loader = torch.utils.data.DataLoader(test_data, batch_size=200, shuffle=False, num_workers=8, prefetch_factor=2)
+test_loader = torch.utils.data.DataLoader(test_data, batch_size=200, shuffle=True, num_workers=8, prefetch_factor=2)
 
 # Model definition
 criterion = torch.nn.CrossEntropyLoss()
