@@ -31,8 +31,8 @@ test_transform = transforms.Compose([
 train_data = CUB_200(root='CUB-200', download=True, transform=train_transform, train=True)
 test_data = CUB_200(root='CUB-200', download=True, transform=test_transform, train=False)
 
-train_loader = torch.utils.data.DataLoader(train_data, batch_size=200, shuffle=True, num_workers=8, prefetch_factor=2)
-test_loader = torch.utils.data.DataLoader(test_data, batch_size=200, shuffle=True, num_workers=8, prefetch_factor=2)
+train_loader = torch.utils.data.DataLoader(train_data, batch_size=100, shuffle=True, num_workers=8, prefetch_factor=2)
+test_loader = torch.utils.data.DataLoader(test_data, batch_size=100, shuffle=True, num_workers=8, prefetch_factor=2)
 
 # Model definition with pretrained weights
 model = models.resnet50(weights=None)
