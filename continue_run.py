@@ -99,7 +99,7 @@ def validate(model, test_loader, criterion, train_on_gpu=True):
 
 
 # Early stopping parameters
-patience = 10
+patience = 100
 min_improvement = 0.01
 patience_counter = 0
 
