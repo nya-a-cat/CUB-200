@@ -35,7 +35,7 @@ train_loader = torch.utils.data.DataLoader(train_data, batch_size=200, shuffle=T
 test_loader = torch.utils.data.DataLoader(test_data, batch_size=200, shuffle=True, num_workers=8, prefetch_factor=2)
 
 # Model definition with pretrained weights
-model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
+model = models.resnet50(weights=None)
 # Replace the final fully connected layer
 model.fc = torch.nn.Linear(model.fc.in_features, 200)
 
