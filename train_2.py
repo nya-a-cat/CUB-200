@@ -56,11 +56,11 @@ class ReversibleTransform:
         if self.translation:
             h, w = feature_map.shape[-2:]
             pixel_trans = [-t * s for t, s in zip(self.translation, (w, h))]
-            feature_map = F.affine_grid(
-                torch.tensor([[1, 0, -pixel_trans[0] / w],
-                              [0, 1, -pixel_trans[1] / h]]).unsqueeze(0).float().to(feature_map.device),
-                feature_map.shape
-            )
+            affine_matrix = torch.tensor([[1, 0, pixel_trans[0] / w],
+                                          [0, 1, pixel_trans[1] / h]]).unsqueeze(0).float().to(feature_map.device)
+
+            feature_map = F.affine_grid(affine_matrix, feature_map.shape)
+            feature_map = F.grid_sample(feature_map, feature_map, mode='bilinear', align_corners=False)
 
         if self.angle:
             feature_map = torch.rot90(
@@ -104,11 +104,18 @@ class AugmentedCUB200(Dataset):
 
         return aug1, aug2, label, self.transform1, self.transform2
 
+    def __len__(self):
+        """
+        返回数据集的大小
+        """
+        return len(self.dataset)
+
+
 
 class FeatureAlignmentLoss(nn.Module):
     """
     实现2.4要求：计算特征对齐的一致性损失
-    L = ||invaug2(Ft) - invaug1(Fs)||
+    L = ||invaug2(Ft) - invaug1(Fs)||^2
     """
 
     def __init__(self):
@@ -172,7 +179,7 @@ def train_student(teacher_model, student_model, train_loader, optimizer,
         if batch_idx % visualization_freq == 0:
             visualize_feature_alignment(
                 student_features[0], teacher_features[0],
-                transform1[0], transform2[0],
+                transform1, transform2,
                 batch_idx, epoch
             )
 
@@ -217,6 +224,7 @@ def visualize_feature_alignment(student_feat, teacher_feat, transform1, transfor
         "batch": batch_idx
     })
     plt.close()
+
 
 def main():
     # Initialize models
