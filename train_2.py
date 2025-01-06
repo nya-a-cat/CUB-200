@@ -83,8 +83,8 @@ class AugmentedCUB200(Dataset):
     def __init__(self, original_dataset):
         self.dataset = original_dataset
         # 创建两个不同强度的变换
-        self.transform1 = ReversibleTransform(stronger=False)  # aug1: 较弱的增强
-        self.transform2 = ReversibleTransform(stronger=True)  # aug2: 较强的增强
+        self.transform1 = ReversibleTransform(stronger=False)  # 较弱的增强
+        self.transform2 = ReversibleTransform(stronger=True)  # 较强的增强
 
         self.base_transform = transforms.Compose([
             transforms.Resize((256, 256)),
@@ -102,13 +102,14 @@ class AugmentedCUB200(Dataset):
         aug1 = self.transform1(img)  # 较弱的增强版本，用于StudentNet
         aug2 = self.transform2(img)  # 较强的增强版本，用于TeacherNet
 
-        return aug1, aug2, label, self.transform1, self.transform2
+        return aug1, aug2, label  # 不再返回 transform1 和 transform2
 
     def __len__(self):
         """
         返回数据集的大小
         """
         return len(self.dataset)
+
 
 
 
