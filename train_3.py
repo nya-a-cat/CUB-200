@@ -291,7 +291,7 @@ def main():
         teacher_model.load_state_dict(torch.load('model_checkpoints/best_model.pth')['model_state_dict'])
         teacher_model = teacher_model.to(device)
 
-        student_model = models.resnet18(weights=ResNet18_Weights.IMAGENET1K_V2)
+        student_model = models.resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
         student_model.fc = nn.Linear(student_model.fc.in_features, 200)
         student_model = student_model.to(device)
 
