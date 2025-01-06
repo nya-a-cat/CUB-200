@@ -9,7 +9,7 @@ from torch.utils.data import Dataset, DataLoader
 import numpy as np
 from PIL import Image
 from writing_custom_datasets import CUB_200
-from torchvision.models import ResNet18_Weights
+from torchvision.models import ResNet18_Weights, ResNet50_Weights
 
 
 class ReversibleTransform:
@@ -220,7 +220,7 @@ def visualize_feature_alignment(student_feat, teacher_feat, transform1, transfor
 
 def main():
     # Initialize models
-    teacher_model = models.resnet50(weights=ResNet18_Weights.IMAGENET1K_V2)
+    teacher_model = models.resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
     teacher_model.fc = nn.Linear(teacher_model.fc.in_features, 200)
     # Load the trained teacher weights here
     teacher_model.load_state_dict(torch.load('model_checkpoints/best_model.pth')['model_state_dict'])
