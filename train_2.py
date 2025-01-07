@@ -139,7 +139,6 @@ aug2 = transforms.Compose([
     transforms.ToTensor(),
 ])
 
-
 # Create the dataloader
 dataloader = create_contrastive_dataloader(
     dataset=CUB_200(root='CUB-200', train=True, download=True),
@@ -192,7 +191,6 @@ def show_augmented_pairs(dataloader, num_pairs=3):
     plt.tight_layout()
     plt.show()
 
-
 # Visualize some pairs
 
 show_augmented_pairs(dataloader)
@@ -227,59 +225,6 @@ align_conv = (
 # L= || invaug2(Ft) - invaug1(Fs) ||.
 # Compute inverse augmentations and consistency loss
 # Helper function to invert common transforms
-
-def invert_transform(transform):
-    # 如果是一个组合变换（transforms.Compose），递归处理其中的每个变换
-    if isinstance(transform, transforms.Compose):
-        # 反向逐个处理每个变换
-        inverse_transforms = [invert_transform(t) for t in reversed(transform.transforms)]
-        # 返回逆变换的组合
-        return transforms.Compose(inverse_transforms)
-
-    # 处理水平翻转
-    elif isinstance(transform, transforms.RandomHorizontalFlip):
-        return transform  # 水平翻转是自反的
-
-    # 处理垂直翻转
-    elif isinstance(transform, transforms.RandomVerticalFlip):
-        return transform  # 垂直翻转是自反的
-
-    # 处理旋转变换
-    elif isinstance(transform, transforms.RandomRotation):
-        # 如果是列表（角度范围），则对每个角度反向
-        if isinstance(transform.degrees, list):
-            return transforms.RandomRotation([-d for d in transform.degrees])
-        # 如果是单一的角度，直接反向
-        return transforms.RandomRotation(-transform.degrees)
-
-    # 处理仿射变换（包括平移、旋转等）
-    elif isinstance(transform, transforms.RandomAffine):
-        degrees = -transform.degrees if isinstance(transform.degrees, (int, float)) else [-d for d in transform.degrees]
-
-        # 反转平移值时，需要确保其范围在 [0, 1] 内
-        if transform.translate:
-            translate = [-t if t else None for t in transform.translate]
-            # 限制平移值在 [0, 1] 范围内
-            translate = [max(0, min(t, 1)) if t is not None else None for t in translate]
-        else:
-            translate = None
-
-        scale = [1 / t if t else None for t in transform.scale] if transform.scale else None
-        shear = [-t if t else None for t in transform.shear] if transform.shear else None
-
-        return transforms.RandomAffine(degrees, translate=translate, scale=scale, shear=shear)
-
-    # 处理颜色抖动（ColorJitter），无法逆转，返回原样
-    elif isinstance(transform, transforms.ColorJitter):
-        return transform
-
-    # 处理归一化变换
-    elif isinstance(transform, transforms.Normalize):
-        return transforms.Normalize(mean=-transform.mean, std=transform.std)
-
-    # 如果是其他类型的变换，原样返回
-    return transform
-
 
 def compute_consistency_loss(
         features_s, features_t, transform1, transform2):
@@ -324,7 +269,77 @@ for param in TeacherNet.parameters():
 #     return transform
 #     计算consistency loss并显示在图片上
 
+def invert_transform(compose_transform):
+    """
+    Generate inverse transformations for a given transforms.Compose object.
+    Note: Some transformations like random augmentations cannot be perfectly inverted
+    due to their stochastic nature.
 
+    Args:
+        compose_transform (transforms.Compose): Original composition of transforms
+
+    Returns:
+        transforms.Compose: Composition of approximate inverse transforms
+    """
+    inverse_transforms = []
+
+    for transform in reversed(compose_transform.transforms):
+        if isinstance(transform, transforms.RandomResizedCrop):
+            # RandomResizedCrop 不能完美还原，但可以resize到原始大小
+            inverse_transforms.append(transforms.Resize((256, 256)))  # 假设原始大小
+
+        elif isinstance(transform, transforms.RandomHorizontalFlip):
+            # 随机翻转无法准确还原，因为不知道是否进行了翻转
+            # 保持原样即可，不添加逆变换
+            pass
+
+        elif isinstance(transform, transforms.ColorJitter):
+            # 颜色抖动的逆变换应该使用相反的参数
+            inverse_transforms.append(transforms.ColorJitter(
+                brightness=transform.brightness if transform.brightness else None,
+                contrast=transform.contrast if transform.contrast else None,
+                saturation=transform.saturation if transform.saturation else None,
+                hue=(-transform.hue, transform.hue) if transform.hue else None
+            ))
+
+        elif isinstance(transform, transforms.RandomRotation):
+            # 随机旋转的逆变换需要知道具体旋转了多少度
+            # 这里保存旋转角度作为transform的属性
+            if hasattr(transform, 'actual_angle'):
+                inverse_transforms.append(transforms.RandomRotation(
+                    degrees=-transform.actual_angle
+                ))
+
+        elif isinstance(transform, transforms.RandomAffine):
+            # 仿射变换的逆变换需要原始变换矩阵的逆矩阵
+            # 这里需要在transform时保存变换矩阵
+            if hasattr(transform, 'last_matrix'):
+                # 使用numpy.linalg.inv计算逆矩阵
+                import numpy as np
+                inv_matrix = np.linalg.inv(transform.last_matrix)
+                inverse_transforms.append(
+                    transforms.Lambda(lambda x: F.affine(
+                        x,
+                        angle=inv_matrix[0, 0],
+                        translate=(inv_matrix[0, 2], inv_matrix[1, 2]),
+                        scale=1.0 / np.sqrt(inv_matrix[0, 0] ** 2 + inv_matrix[0, 1] ** 2),
+                        shear=np.arctan2(inv_matrix[0, 1], inv_matrix[0, 0])
+                    ))
+                )
+
+        elif isinstance(transform, transforms.ToTensor):
+            inverse_transforms.append(transforms.ToPILImage())
+
+        elif isinstance(transform, transforms.Normalize):
+            # Normalize的逆变换需要用相反的mean和std
+            mean = torch.tensor(transform.mean)
+            std = torch.tensor(transform.std)
+            inverse_transforms.append(transforms.Normalize(
+                mean=(-mean / std),
+                std=(1.0 / std)
+            ))
+
+    return transforms.Compose(inverse_transforms)
 
 def visualize_consistency_loss(batch, arg1, arg2, criterion):
     """
