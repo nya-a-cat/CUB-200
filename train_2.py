@@ -3,14 +3,8 @@ from writing_custom_datasets import CUB_200
 import torch.utils.data
 import torchvision.transforms as transforms
 import torch
-import torch.nn.functional as F
-import numpy as np
 from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
-from collections import defaultdict
-from torch.cuda.amp import autocast, GradScaler
-from torch.optim.lr_scheduler import CosineAnnealingLR
-from tqdm import tqdm
 
 def create_contrastive_dataloader(dataset,aug1,aug2,batch_size=32,shuffle=True,num_workers=0
 ):
@@ -108,7 +102,7 @@ def display_comparison_of_augmented_pairs(dataloader, num_pairs=3):
 
     plt.tight_layout()
     plt.show()
-    
+
 def inverse_transform(transformations):
     """
     Create an inverse of the given transformations for spatial or planar reversal.
@@ -117,104 +111,93 @@ def inverse_transform(transformations):
         transformations: List of torchvision transformations to reverse.
 
     Returns:
-        Callable torchvision transform that reverses the given transformations.
+        torchvision.transforms.Compose object that reverses the given transformations.
     """
-    def reverse_transform(image):
-        # Example reversal logic for translation, rotation, and flip
-        for transform in reversed(transformations.transforms):  # Reverse the order of transformations
-            if isinstance(transform, transforms.RandomHorizontalFlip):
-                # Reverse horizontal flip
-                image = transforms.functional.hflip(image)
-            elif isinstance(transform, transforms.RandomAffine):
-                # Reverse translation (using a negative translation)
-                translate = transform.translate
-                if translate is not None:
-                    image = transforms.functional.affine(
-                        image, angle=0, translate=(-translate[0], -translate[1]), scale=1, shear=[0, 0]
-                    )
-            elif isinstance(transform, transforms.RandomRotation):
-                # Reverse rotation
-                degrees = transform.degrees
-                image = transforms.functional.rotate(image, angle=-degrees)
-        return image
+    reversed_transforms = []
 
-    return reverse_transform  # Return as a callable function
+    for transform in reversed(transformations.transforms):  # Reverse the order of transformations
+        if isinstance(transform, transforms.Normalize):
+            # To reverse Normalize, create an un-normalization transform
+            mean = torch.tensor(transform.mean)
+            std = torch.tensor(transform.std)
+            reversed_transforms.append(transforms.Normalize((-mean / std).tolist(), (1.0 / std).tolist()))
+        elif isinstance(transform, transforms.RandomHorizontalFlip):
+            # Reverse Horizontal Flip by adding it again
+            reversed_transforms.append(transforms.RandomHorizontalFlip(p=1.0))
+        elif isinstance(transform, transforms.RandomVerticalFlip):
+            # Reverse Vertical Flip by adding it again
+            reversed_transforms.append(transforms.RandomVerticalFlip(p=1.0))
+        elif isinstance(transform, transforms.ToTensor):
+            # Tensor conversion can be seen as a no-op (no need for reversal)
+            continue
+        else:
+            # Skip transformations that cannot be inverted
+            continue
 
-def consistency_loss(Ft, Fs, invaug2, invaug1):
-    """
-    Consistency Loss: Measures the difference between augmented feature projections.
-
-    Args:
-        Ft: Feature projection from the teacher network
-        Fs: Feature projection from the student network
-        invaug2: Inverse augmentation applied to the teacher's feature map
-        invaug1: Inverse augmentation applied to the student's feature map
-
-    Returns:
-        Consistency loss value
-    """
-    Ft_res = invaug2(Ft)  # Apply inverse augmentation to the teacher's output
-    Fs_res = invaug1(Fs)  # Apply inverse augmentation to the student's output
-    return torch.norm(Ft_res - Fs_res, p=2)  # L2 Loss
+    # Return the reversed transformations as a Compose object
+    return transforms.Compose(reversed_transforms)
 
 
-def main():
-    aug1 = transforms.Compose([
-        transforms.RandomResizedCrop(224),
-        transforms.RandomHorizontalFlip(),
-        transforms.ColorJitter(0.4, 0.4, 0.4, 0.1),
-        transforms.ToTensor(),
-    ])
+aug1 = transforms.Compose([
+    transforms.RandomResizedCrop(224),
+    transforms.RandomHorizontalFlip(),
+    transforms.ColorJitter(0.4, 0.4, 0.4, 0.1),
+    transforms.ToTensor(),
+])
 
-    aug2 = transforms.Compose([
-        transforms.RandomResizedCrop(224, scale=(0.5, 1.0)),  # 调整裁剪的范围，更大的裁剪变换
-        transforms.RandomHorizontalFlip(),
-        transforms.ColorJitter(brightness=0.6, contrast=0.6, saturation=0.6, hue=0.2),  # 扩大色调变化范围
-        transforms.RandomRotation(30),  # 加入旋转
-        transforms.RandomAffine(degrees=0, translate=(0.2, 0.2)),  # 平移变换，增大范围
-        transforms.ToTensor(),
-    ])
+aug2 = transforms.Compose([
+    transforms.RandomResizedCrop(224, scale=(0.5, 1.0)),  # 调整裁剪的范围，更大的裁剪变换
+    transforms.RandomHorizontalFlip(),
+    transforms.ColorJitter(brightness=0.6, contrast=0.6, saturation=0.6, hue=0.2),  # 扩大色调变化范围
+    transforms.RandomRotation(30),  # 加入旋转
+    transforms.RandomAffine(degrees=0, translate=(0.2, 0.2)),  # 平移变换，增大范围
+    transforms.ToTensor(),
+])
 
-    dataloader = create_contrastive_dataloader(
-        dataset=CUB_200(root='CUB-200', train=True, download=True),
-        aug1=aug1,
-        aug2=aug2,
-        batch_size=32
-    )
+dataloader = create_contrastive_dataloader(
+    dataset=CUB_200(root='CUB-200', train=True, download=True),
+    aug1=aug1,
+    aug2=aug2,
+    batch_size=32
+)
 
-    display_comparison_of_augmented_pairs(dataloader)
+StudentNet = models.resnet18(pretrained=True)
+TeacherNet = models.resnet50(pretrained=True)
+StudentNet.fc = torch.nn.Linear(StudentNet.fc.in_features, 200)
+TeacherNet.fc = torch.nn.Linear(TeacherNet.fc.in_features, 200)
 
-    batch = next(iter(dataloader))
-    batch_transformed_images_1 = batch['aug1']
-    batch_transformed_images_2 = batch['aug2']
+# 2.2）把aug1(x)输入StudentNet，其中最后一层feat
+# ure map记为Fs。
+batch = next(iter(dataloader))
+aug_1_image = batch['aug1']
+Fs= StudentNet(aug_1_image)
 
-    StudentNet = models.resnet18(pretrained=True)
-    TeacherNet = models.resnet50(pretrained=True)
+# 2.3）把aug2(x)输入TeacherNet，其中最后一层feature map记为
+# Ft。并使用Conv1x1把通道数量压缩和Fs一致。
+aug_2_image = batch['aug2']
+Ft = TeacherNet(aug_2_image)
+channel_align = torch.nn.Conv2d(2048, 512, kernel_size=1)
+Ft = channel_align(Ft)  # 将teacher特征通道数压缩到和student一致
 
-    StudentNet.fc = torch.nn.Linear(StudentNet.fc.in_features, 200)
-    TeacherNet.fc = torch.nn.Linear(TeacherNet.fc.in_features, 200)
+# 2.4)  添加一个consistency loss: L= || invaug2(Ft) - invaug1(Fs) ||. 其
+# 中，invaug1和invaug2进行数据增强中平面变换的逆变换，例如原本是向右平移，逆就是向左平移。
 
-    Fs = StudentNet.fc
-    Ft = TeacherNet.fc
+invaug1 = inverse_transform(aug1)
+invaug2 = inverse_transform(aug2)
 
-    Ft_aligned = torch.nn.Conv2d(Fs.in_features, Ft.in_features,
-                                 kernel_size=1, stride=1, padding=0, bias=False)
 
-    invaug1 = inverse_transform(aug1)
-    invaug2 = inverse_transform(aug2)
+consistency_loss = torch.norm(invaug1-invaug2, p=2)
 
-    print("Aug1 Parameters:")
-    print(aug1.__dict__)
+print("Aug1 Parameters:")
+print(aug1.__dict__)
 
-    print("\nAug2 Parameters:")
-    print(aug2.__dict__)
+print("\nAug2 Parameters:")
+print(aug2.__dict__)
 
-    print("\nInverse Aug1 Parameters:")
-    print(invaug1.__dict__)
+print("\nInverse Aug1 Parameters:")
+print(invaug1.__dict__)
 
-    print("\nInverse Aug2 Parameters:")
-    print(invaug2.__dict__)
-    
-    
-    
-main()
+print("\nInverse Aug2 Parameters:")
+print(invaug2.__dict__)
+
+print(consistency_loss)
