@@ -1,100 +1,18 @@
 import torchvision.models as models
 from writing_custom_datasets import CUB_200
-import torchvision.transforms as transforms
 import torch.utils.data
+import torchvision.transforms as transforms
 import torch
 import torch.nn.functional as F
+import numpy as np
 from torch.utils.data import Dataset, DataLoader
-import wandb  # 可选：用于实验追踪
+import matplotlib.pyplot as plt
+from collections import defaultdict
+from torch.cuda.amp import autocast, GradScaler
+from torch.optim.lr_scheduler import CosineAnnealingLR
+from tqdm import tqdm
 
-# 设置随机种子以确保可重复性
-def set_seed(seed=42):
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
-# 数据增强和预处理
-def get_transforms(train=True):
-    if train:
-        return transforms.Compose([
-            transforms.Resize((256, 256)),
-            transforms.RandomCrop(224),
-            transforms.RandomHorizontalFlip(),
-            transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
-            transforms.RandomAffine(degrees=15, translate=(0.1, 0.1)),
-            transforms.ToTensor(),
-            transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
-        ])
-    else:
-        return transforms.Compose([
-            transforms.Resize((256, 256)),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
-        ])
-
-# 验证函数
-def validate(model, test_loader, criterion, device):
-    model.eval()
-    valid_loss = 0.0
-    valid_total = 0
-    valid_correct = 0
-
-    with torch.no_grad():
-        for batch_images, batch_labels in test_loader:
-            batch_images = batch_images.to(device)
-            batch_labels = batch_labels.to(device)
-
-            outputs = model(batch_images)
-            loss = criterion(outputs, batch_labels)
-            valid_loss += loss.item()
-
-            _, predicted = torch.max(outputs.data, 1)
-            valid_total += batch_labels.size(0)
-            valid_correct += (predicted == batch_labels).sum().item()
-
-    avg_valid_loss = valid_loss / len(test_loader)
-    valid_accuracy = 100 * valid_correct / valid_total
-
-    return avg_valid_loss, valid_accuracy
-
-#for every picture, this dataloader return aug1(pic) and aug2(pic)
-class ContrastiveDataset(Dataset):
-    """
-    Wrapper dataset that applies two different augmentations to each image
-    for contrastive learning approaches.
-    """
-
-    def __init__(self, base_dataset, augmentation1, augmentation2):
-        """
-        Args:
-            base_dataset: Original dataset containing images
-            augmentation1: First augmentation transform
-            augmentation2: Second augmentation transform
-        """
-        self.base_dataset = base_dataset
-        self.aug1 = augmentation1
-        self.aug2 = augmentation2
-
-    def __getitem__(self, idx):
-        image, label = self.base_dataset[idx]
-        return {
-            'aug1': self.aug1(image),
-            'aug2': self.aug2(image),
-            'label': label
-        }
-
-    def __len__(self):
-        return len(self.base_dataset)
-
-def create_contrastive_dataloader(
-        dataset,
-        aug1,
-        aug2,
-        batch_size=32,
-        shuffle=True,
-        num_workers=0
+def create_contrastive_dataloader(dataset,aug1,aug2,batch_size=32,shuffle=True,num_workers=0
 ):
     """
     Creates a DataLoader that returns pairs of differently augmented views of the same image.
@@ -113,6 +31,35 @@ def create_contrastive_dataloader(
             - 'aug2': Second augmented view
             - 'label': Original label
     """
+
+    class ContrastiveDataset(Dataset):
+        """
+        Wrapper dataset that applies two different augmentations to each image
+        for contrastive learning approaches.
+        """
+
+        def __init__(self, base_dataset, augmentation1, augmentation2):
+            """
+            Args:
+                base_dataset: Original dataset containing images
+                augmentation1: First augmentation transform
+                augmentation2: Second augmentation transform
+            """
+            self.base_dataset = base_dataset
+            self.aug1 = augmentation1
+            self.aug2 = augmentation2
+
+        def __getitem__(self, idx):
+            image, label = self.base_dataset[idx]
+            return {
+                'aug1': self.aug1(image),
+                'aug2': self.aug2(image),
+                'label': label
+            }
+
+        def __len__(self):
+            return len(self.base_dataset)
+
     contrastive_dataset = ContrastiveDataset(dataset, aug1, aug2)
 
     return DataLoader(
@@ -122,36 +69,7 @@ def create_contrastive_dataloader(
         num_workers=num_workers
     )
 
-# 其中aug2的增强范围要更大
-aug1 = transforms.Compose([
-    transforms.RandomResizedCrop(224),
-    transforms.RandomHorizontalFlip(),
-    transforms.ColorJitter(0.4, 0.4, 0.4, 0.1),
-    transforms.ToTensor(),
-])
-
-aug2 = transforms.Compose([
-    transforms.RandomResizedCrop(224, scale=(0.5, 1.0)),  # 调整裁剪的范围，更大的裁剪变换
-    transforms.RandomHorizontalFlip(),
-    transforms.ColorJitter(brightness=0.6, contrast=0.6, saturation=0.6, hue=0.2),  # 扩大色调变化范围
-    transforms.RandomRotation(30),  # 加入旋转
-    transforms.RandomAffine(degrees=0, translate=(0.2, 0.2)),  # 平移变换，增大范围
-    transforms.ToTensor(),
-])
-
-# Create the dataloader
-dataloader = create_contrastive_dataloader(
-    dataset=CUB_200(root='CUB-200', train=True, download=True),
-    aug1=aug1,
-    aug2=aug2,
-    batch_size=32
-)
-
-# use plt to print aug1 aug2 and label for valid this dataloader
-import matplotlib.pyplot as plt
-import torchvision.transforms as transforms
-
-def show_augmented_pairs(dataloader, num_pairs=3):
+def display_comparison_of_augmented_pairs(dataloader, num_pairs=3):
     """
     Display pairs of augmented images from the contrastive dataloader
 
@@ -190,216 +108,113 @@ def show_augmented_pairs(dataloader, num_pairs=3):
 
     plt.tight_layout()
     plt.show()
-
-# Visualize some pairs
-
-show_augmented_pairs(dataloader)
-
-# 2.2）把aug1(x)输入StudentNet，其中最后一层feature map记为Fs。
-# 2.3）把aug2(x)输入TeacherNet，
-# 其中最后一层feature map记为Ft。
-
-batch = next(iter(dataloader))
-aug1_images = batch['aug1']
-StudentNet = models.resnet18(pretrained=True)
-StudentNet.fc = torch.nn.Linear(StudentNet.fc.in_features, 200)
-
-aug2_images = batch['aug2']
-TeacherNet = models.resnet50(pretrained=True)
-TeacherNet.fc = torch.nn.Linear(TeacherNet.fc.in_features, 200)
-
-Fs = StudentNet.fc
-Ft = TeacherNet.fc
-
-# 使用Conv1x1压缩通道数，并确保学生和教师网络的通道数一致
-align_conv = (
-    torch.nn.Conv2d
-    (Fs.in_features,
-     Ft.in_features,
-     kernel_size=1,
-     stride=1,
-     padding=0,
-     bias=False))
-
-# 2.4)
-# L= || invaug2(Ft) - invaug1(Fs) ||.
-# Compute inverse augmentations and consistency loss
-# Helper function to invert common transforms
-
-def compute_consistency_loss(
-        features_s, features_t, transform1, transform2):
+    
+def inverse_transform(transformations):
     """
-    Compute consistency loss between student and teacher features after inverse transforms
+    Create an inverse of the given transformations for spatial or planar reversal.
 
     Args:
-        features_s: Student network features
-        features_t: Teacher network features
-        transform1: First transformation (torchvision.transforms)
-        transform2: Second transformation (torchvision.transforms)
-    """
-
-    # Get inverse transforms
-    inv_transform1 = invert_transform(transform1)
-    inv_transform2 = invert_transform(transform2)
-
-    # Apply inverse transforms to features
-    inv_features_s = inv_transform1(features_s)
-    inv_features_t = inv_transform2(features_t)
-
-    # Compute MSE loss between inversely transformed features
-    consistency_loss = F.mse_loss(inv_features_s, inv_features_t)
-
-    return consistency_loss
-
-# Freeze teacher network parameters
-for param in TeacherNet.parameters():
-    param.requires_grad = False
-
-# TODO:total_loss = cls_loss + consistency_loss
-# Add any other losses you have
-
-# 2.6）设计可视化证明
-# consistency loss没有错误，
-
-# def f(batch, arg1, arg2, criterion, )
-#     use plt to show origin image, arg1image, arg2image,
-#     and inversarg1 image ,inversarg2 image,
-#     we have def compute_consistency_loss
-#     return consistency_loss and def invert_transform
-#     return transform
-#     计算consistency loss并显示在图片上
-
-def invert_transform(compose_transform):
-    """
-    Generate inverse transformations for a given transforms.Compose object.
-    Note: Some transformations like random augmentations cannot be perfectly inverted
-    due to their stochastic nature.
-
-    Args:
-        compose_transform (transforms.Compose): Original composition of transforms
+        transformations: List of torchvision transformations to reverse.
 
     Returns:
-        transforms.Compose: Composition of approximate inverse transforms
+        Callable torchvision transform that reverses the given transformations.
     """
-    inverse_transforms = []
+    def reverse_transform(image):
+        # Example reversal logic for translation, rotation, and flip
+        for transform in reversed(transformations.transforms):  # Reverse the order of transformations
+            if isinstance(transform, transforms.RandomHorizontalFlip):
+                # Reverse horizontal flip
+                image = transforms.functional.hflip(image)
+            elif isinstance(transform, transforms.RandomAffine):
+                # Reverse translation (using a negative translation)
+                translate = transform.translate
+                if translate is not None:
+                    image = transforms.functional.affine(
+                        image, angle=0, translate=(-translate[0], -translate[1]), scale=1, shear=[0, 0]
+                    )
+            elif isinstance(transform, transforms.RandomRotation):
+                # Reverse rotation
+                degrees = transform.degrees
+                image = transforms.functional.rotate(image, angle=-degrees)
+        return image
 
-    for transform in reversed(compose_transform.transforms):
-        if isinstance(transform, transforms.RandomResizedCrop):
-            # RandomResizedCrop 不能完美还原，但可以resize到原始大小
-            inverse_transforms.append(transforms.Resize((256, 256)))  # 假设原始大小
+    return reverse_transform  # Return as a callable function
 
-        elif isinstance(transform, transforms.RandomHorizontalFlip):
-            # 随机翻转无法准确还原，因为不知道是否进行了翻转
-            # 保持原样即可，不添加逆变换
-            pass
-
-        elif isinstance(transform, transforms.ColorJitter):
-            # 颜色抖动的逆变换应该使用相反的参数
-            inverse_transforms.append(transforms.ColorJitter(
-                brightness=transform.brightness if transform.brightness else None,
-                contrast=transform.contrast if transform.contrast else None,
-                saturation=transform.saturation if transform.saturation else None,
-                hue=(-transform.hue, transform.hue) if transform.hue else None
-            ))
-
-        elif isinstance(transform, transforms.RandomRotation):
-            # 随机旋转的逆变换需要知道具体旋转了多少度
-            # 这里保存旋转角度作为transform的属性
-            if hasattr(transform, 'actual_angle'):
-                inverse_transforms.append(transforms.RandomRotation(
-                    degrees=-transform.actual_angle
-                ))
-
-        elif isinstance(transform, transforms.RandomAffine):
-            # 仿射变换的逆变换需要原始变换矩阵的逆矩阵
-            # 这里需要在transform时保存变换矩阵
-            if hasattr(transform, 'last_matrix'):
-                # 使用numpy.linalg.inv计算逆矩阵
-                import numpy as np
-                inv_matrix = np.linalg.inv(transform.last_matrix)
-                inverse_transforms.append(
-                    transforms.Lambda(lambda x: F.affine(
-                        x,
-                        angle=inv_matrix[0, 0],
-                        translate=(inv_matrix[0, 2], inv_matrix[1, 2]),
-                        scale=1.0 / np.sqrt(inv_matrix[0, 0] ** 2 + inv_matrix[0, 1] ** 2),
-                        shear=np.arctan2(inv_matrix[0, 1], inv_matrix[0, 0])
-                    ))
-                )
-
-        elif isinstance(transform, transforms.ToTensor):
-            inverse_transforms.append(transforms.ToPILImage())
-
-        elif isinstance(transform, transforms.Normalize):
-            # Normalize的逆变换需要用相反的mean和std
-            mean = torch.tensor(transform.mean)
-            std = torch.tensor(transform.std)
-            inverse_transforms.append(transforms.Normalize(
-                mean=(-mean / std),
-                std=(1.0 / std)
-            ))
-
-    return transforms.Compose(inverse_transforms)
-
-def visualize_consistency_loss(batch, arg1, arg2, criterion):
+def consistency_loss(Ft, Fs, invaug2, invaug1):
     """
-    计算一致性损失并显示原始图像、增强图像和反向增强图像。
-
-    该函数使用给定的损失函数计算一致性损失，但仅进行可视化，不返回损失值。
+    Consistency Loss: Measures the difference between augmented feature projections.
 
     Args:
-        batch: 包含图像和标签的一个批次
-        arg1: 第一个增强变换
-        arg2: 第二个增强变换
-        criterion: 损失函数
-        device: 计算设备（如 'cuda' 或 'cpu'）
+        Ft: Feature projection from the teacher network
+        Fs: Feature projection from the student network
+        invaug2: Inverse augmentation applied to the teacher's feature map
+        invaug1: Inverse augmentation applied to the student's feature map
+
+    Returns:
+        Consistency loss value
     """
-    # 获取增强后的图像（假设 batch 中的 aug1 和 aug2 已经是增强过的图片）
-    aug1_images = batch['aug1']
-    aug2_images = batch['aug2']
+    Ft_res = invaug2(Ft)  # Apply inverse augmentation to the teacher's output
+    Fs_res = invaug1(Fs)  # Apply inverse augmentation to the student's output
+    return torch.norm(Ft_res - Fs_res, p=2)  # L2 Loss
 
-    # 假设 StudentNet 和 TeacherNet 是预定义好的网络
-    StudentNet.eval()
-    TeacherNet.eval()
 
-    with torch.no_grad():
-        # 计算学生和教师网络的特征
-        features_s = StudentNet(aug1_images)
-        features_t = TeacherNet(aug2_images)
+def main():
+    aug1 = transforms.Compose([
+        transforms.RandomResizedCrop(224),
+        transforms.RandomHorizontalFlip(),
+        transforms.ColorJitter(0.4, 0.4, 0.4, 0.1),
+        transforms.ToTensor(),
+    ])
 
-        # 使用 criterion 计算一致性损失
-        consistency_loss = criterion(features_s, features_t, arg1, arg2)
+    aug2 = transforms.Compose([
+        transforms.RandomResizedCrop(224, scale=(0.5, 1.0)),  # 调整裁剪的范围，更大的裁剪变换
+        transforms.RandomHorizontalFlip(),
+        transforms.ColorJitter(brightness=0.6, contrast=0.6, saturation=0.6, hue=0.2),  # 扩大色调变化范围
+        transforms.RandomRotation(30),  # 加入旋转
+        transforms.RandomAffine(degrees=0, translate=(0.2, 0.2)),  # 平移变换，增大范围
+        transforms.ToTensor(),
+    ])
 
-    # 可视化原始图像和增强图像
-    fig, axes = plt.subplots(2, 3, figsize=(15, 8))
-    fig.suptitle(f"Consistency Loss: {consistency_loss.item():.4f}", fontsize=16)
+    dataloader = create_contrastive_dataloader(
+        dataset=CUB_200(root='CUB-200', train=True, download=True),
+        aug1=aug1,
+        aug2=aug2,
+        batch_size=32
+    )
 
-    # 展示原始图像
-    axes[0, 0].imshow(batch['aug1'][0].cpu().numpy().transpose(1, 2, 0))
-    axes[0, 0].set_title("Original Image")
-    axes[0, 0].axis('off')
+    display_comparison_of_augmented_pairs(dataloader)
 
-    axes[0, 1].imshow(batch['aug1'][1].cpu().numpy().transpose(1, 2, 0))
-    axes[0, 1].set_title("Aug1 Image")
-    axes[0, 1].axis('off')
+    batch = next(iter(dataloader))
+    batch_transformed_images_1 = batch['aug1']
+    batch_transformed_images_2 = batch['aug2']
 
-    axes[0, 2].imshow(batch['aug2'][0].cpu().numpy().transpose(1, 2, 0))
-    axes[0, 2].set_title("Aug2 Image")
-    axes[0, 2].axis('off')
+    StudentNet = models.resnet18(pretrained=True)
+    TeacherNet = models.resnet50(pretrained=True)
 
-    # 可视化反向增强后的图像
-    inv_aug1 = invert_transform(arg1)(aug1_images).cpu().numpy().transpose(0, 2, 3, 1)[0]
-    inv_aug2 = invert_transform(arg2)(aug2_images).cpu().numpy().transpose(0, 2, 3, 1)[0]
+    StudentNet.fc = torch.nn.Linear(StudentNet.fc.in_features, 200)
+    TeacherNet.fc = torch.nn.Linear(TeacherNet.fc.in_features, 200)
 
-    axes[1, 0].imshow(inv_aug1)
-    axes[1, 0].set_title("Inverse Aug1 Image")
-    axes[1, 0].axis('off')
+    Fs = StudentNet.fc
+    Ft = TeacherNet.fc
 
-    axes[1, 1].imshow(inv_aug2)
-    axes[1, 1].set_title("Inverse Aug2 Image")
-    axes[1, 1].axis('off')
+    Ft_aligned = torch.nn.Conv2d(Fs.in_features, Ft.in_features,
+                                 kernel_size=1, stride=1, padding=0, bias=False)
 
-    plt.tight_layout()
-    plt.show()
+    invaug1 = inverse_transform(aug1)
+    invaug2 = inverse_transform(aug2)
 
-visualize_consistency_loss(next(iter(dataloader)), aug1, aug2, compute_consistency_loss)
+    print("Aug1 Parameters:")
+    print(aug1.__dict__)
+
+    print("\nAug2 Parameters:")
+    print(aug2.__dict__)
+
+    print("\nInverse Aug1 Parameters:")
+    print(invaug1.__dict__)
+
+    print("\nInverse Aug2 Parameters:")
+    print(invaug2.__dict__)
+    
+    
+    
+main()
