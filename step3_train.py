@@ -9,26 +9,6 @@ import copy
 import time
 
 def create_semi_supervised_dataloader(dataset, aug1, aug2, unlabeled_ratio=0.6, batch_size=32, shuffle=True, num_workers=0, pin_memory=False):
-    """
-    Creates a DataLoader with a portion of unlabeled data.
-
-    Args:
-        dataset: Base dataset (e.g., CUB_200)
-        aug1: First augmentation transform
-        aug2: Second augmentation transform
-        unlabeled_ratio: The ratio of unlabeled data (0 to 1)
-        batch_size: Number of samples per batch
-        shuffle: Whether to shuffle the data
-        num_workers: Number of worker processes for data loading
-        pin_memory: Whether to pin memory for faster GPU transfer
-
-    Returns:
-        DataLoader that yields dictionaries containing:
-            - 'aug1': First augmented view
-            - 'aug2': Second augmented view
-            - 'label': Original label (or -1 if unlabeled)
-            - 'is_labeled': Boolean indicating if the sample is labeled
-    """
     class SemiSupervisedDataset(torch.utils.data.Dataset):
         def __init__(self, base_dataset, augmentation1, augmentation2, unlabeled_ratio):
             self.base_dataset = base_dataset
@@ -84,7 +64,7 @@ def create_semi_supervised_dataloader(dataset, aug1, aug2, unlabeled_ratio=0.6, 
     )
     return dataloader
 
-def test_step3():
+def test_step3(use_chinese=False):
     torch.multiprocessing.freeze_support()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -112,9 +92,9 @@ def test_step3():
     all_results = {}
 
     for unlabeled_ratio in R_values:
-        print(f"\n{'='*40}")
+        print(f"\n{'='*50}")
         print(f"Experiment with Unlabeled Ratio: {unlabeled_ratio}")
-        print(f"{'='*40}")
+        print(f"{'='*50}")
         train_dataset = CUB_200(root='CUB-200', train=True, download=True)
 
         val_transform = transforms.Compose([
@@ -142,10 +122,14 @@ def test_step3():
         TeacherNet.fc = torch.nn.Linear(TeacherNet.fc.in_features, num_classes)
         TeacherNet.eval()
         print("StudentNet and TeacherNet initialized.")
+        if use_chinese:
+            print("学生网络和教师网络已初始化。")
 
         for param in TeacherNet.parameters():
             param.requires_grad = False
         print("TeacherNet parameters frozen.")
+        if use_chinese:
+            print("教师网络参数已冻结。")
 
         classification_criterion = torch.nn.CrossEntropyLoss(ignore_index=-1, reduction='none').to(device)
         optimizer = torch.optim.Adam(StudentNet.parameters(), lr=0.001)
@@ -159,7 +143,7 @@ def test_step3():
             confidence = 1.0 - torch.abs(prob_aug1 - prob_aug2).sum(dim=-1)
             return confidence
 
-        def train_one_epoch(epoch, semi_dataloader, StudentNet, TeacherNet, optimizer, classification_criterion, device):
+        def train_one_epoch(epoch, semi_dataloader, StudentNet, TeacherNet, optimizer, classification_criterion, device, use_chinese=False):
             StudentNet.train()
             running_labeled_loss = 0.0
             running_unlabeled_loss = 0.0
@@ -179,19 +163,34 @@ def test_step3():
 
                 unlabeled_mask = ~is_labeled
                 if unlabeled_mask.any():
-                    print(f"  Unlabeled Data in Batch:")
-                    print(f"    Number of Unlabeled Samples: {unlabeled_mask.sum()}")
-                    with torch.no_grad():
-                        teacher_output_aug1 = TeacherNet(aug1_images[unlabeled_mask])
-                        teacher_output_aug2 = TeacherNet(aug2_images[unlabeled_mask])
-                        predicted_labels_aug1 = torch.argmax(teacher_output_aug1, dim=-1)
-                        pseudo_labels[unlabeled_mask] = predicted_labels_aug1
+                    if use_chinese:
+                        print(f"  批次中的未标记数据:")
+                        print(f"    未标记样本数量: {unlabeled_mask.sum()}")
+                        with torch.no_grad():
+                            teacher_output_aug1 = TeacherNet(aug1_images[unlabeled_mask])
+                            teacher_output_aug2 = TeacherNet(aug2_images[unlabeled_mask])
+                            predicted_labels_aug1 = torch.argmax(teacher_output_aug1, dim=-1)
+                            pseudo_labels[unlabeled_mask] = predicted_labels_aug1
 
-                        confidence_scores = calculate_confidence(teacher_output_aug1, teacher_output_aug2)
-                        confidence_weights[unlabeled_mask] = confidence_scores
-                        print(f"    Example Pseudo-Labels: {predicted_labels_aug1[:5].tolist()}")
-                        print(f"    Example Confidence Scores: {confidence_scores[:5].tolist()}")
-                        print(f"    Shape of Confidence Weights: {confidence_weights[unlabeled_mask].shape}")
+                            confidence_scores = calculate_confidence(teacher_output_aug1, teacher_output_aug2)
+                            confidence_weights[unlabeled_mask] = confidence_scores
+                            print(f"    伪标签示例: {predicted_labels_aug1[:5].tolist()}")
+                            print(f"    置信度得分示例: {confidence_scores[:5].tolist()}")
+                            print(f"    置信度权重形状: {confidence_weights[unlabeled_mask].shape}")
+                    else:
+                        print(f"  Unlabeled Data in Batch:")
+                        print(f"    Number of Unlabeled Samples: {unlabeled_mask.sum()}")
+                        with torch.no_grad():
+                            teacher_output_aug1 = TeacherNet(aug1_images[unlabeled_mask])
+                            teacher_output_aug2 = TeacherNet(aug2_images[unlabeled_mask])
+                            predicted_labels_aug1 = torch.argmax(teacher_output_aug1, dim=-1)
+                            pseudo_labels[unlabeled_mask] = predicted_labels_aug1
+
+                            confidence_scores = calculate_confidence(teacher_output_aug1, teacher_output_aug2)
+                            confidence_weights[unlabeled_mask] = confidence_scores
+                            print(f"    Example Pseudo-Labels: {predicted_labels_aug1[:5].tolist()}")
+                            print(f"    Example Confidence Scores: {confidence_scores[:5].tolist()}")
+                            print(f"    Shape of Confidence Weights: {confidence_weights[unlabeled_mask].shape}")
 
                 student_predictions = StudentNet(aug1_images)
 
@@ -204,7 +203,10 @@ def test_step3():
                     unlabeled_predictions = student_predictions[unlabeled_mask]
                     unlabeled_loss_values = classification_criterion(unlabeled_predictions, pseudo_labels[unlabeled_mask])
                     weighted_unlabeled_loss = (unlabeled_loss_values * confidence_weights[unlabeled_mask]).mean()
-                    print(f"    Weighted Unlabeled Loss: {weighted_unlabeled_loss.item():.4f}")
+                    if use_chinese:
+                        print(f"    加权的未标记损失: {weighted_unlabeled_loss.item():.4f}")
+                    else:
+                        print(f"    Weighted Unlabeled Loss: {weighted_unlabeled_loss.item():.4f}")
                 running_unlabeled_loss += weighted_unlabeled_loss.item()
 
                 loss = labeled_loss + weighted_unlabeled_loss
@@ -212,14 +214,20 @@ def test_step3():
                 optimizer.step()
 
                 if (i + 1) % 10 == 0:
-                    print(f"Epoch [{epoch+1}], Batch [{i+1}/{total_batches}], Labeled Loss: {labeled_loss.item():.4f}, Unlabeled Loss: {weighted_unlabeled_loss.item():.4f}")
+                    if use_chinese:
+                        print(f"Epoch [{epoch+1}], Batch [{i+1}/{total_batches}], 标记损失: {labeled_loss.item():.4f}, 未标记损失: {weighted_unlabeled_loss.item():.4f}")
+                    else:
+                        print(f"Epoch [{epoch+1}], Batch [{i+1}/{total_batches}], Labeled Loss: {labeled_loss.item():.4f}, Unlabeled Loss: {weighted_unlabeled_loss.item():.4f}")
 
             epoch_duration = time.time() - start_time
             avg_labeled_loss = running_labeled_loss / total_batches
             avg_unlabeled_loss = running_unlabeled_loss / total_batches
-            print(f"Epoch [{epoch+1}] finished in {epoch_duration:.2f} seconds, Avg Labeled Loss: {avg_labeled_loss:.4f}, Avg Unlabeled Loss: {avg_unlabeled_loss:.4f}")
+            if use_chinese:
+                print(f"Epoch [{epoch+1}] 完成，耗时 {epoch_duration:.2f} 秒, 平均标记损失: {avg_labeled_loss:.4f}, 平均未标记损失: {avg_unlabeled_loss:.4f}")
+            else:
+                print(f"Epoch [{epoch+1}] finished in {epoch_duration:.2f} seconds, Avg Labeled Loss: {avg_labeled_loss:.4f}, Avg Unlabeled Loss: {avg_unlabeled_loss:.4f}")
 
-        def validate():
+        def validate(use_chinese=False):
             StudentNet.eval()
             correct = 0
             total = 0
@@ -241,32 +249,50 @@ def test_step3():
         patience = 5
 
         print("Starting training...")
+        if use_chinese:
+            print("开始训练...")
         for epoch in range(num_epochs):
-            train_one_epoch(epoch, semi_dataloader, StudentNet, TeacherNet, optimizer, classification_criterion, device)
-            current_val_accuracy = validate()
+            train_one_epoch(epoch, semi_dataloader, StudentNet, TeacherNet, optimizer, classification_criterion, device, use_chinese)
+            current_val_accuracy = validate(use_chinese)
 
             if current_val_accuracy > best_val_accuracy * 1.01:
                 best_val_accuracy = current_val_accuracy
                 best_model_wts = copy.deepcopy(StudentNet.state_dict())
                 epochs_without_improvement = 0
-                print(f"Validation accuracy improved to {best_val_accuracy:.2f}%, saving model.")
+                if use_chinese:
+                    print(f"验证精度提升至 {best_val_accuracy:.2f}%, 正在保存模型。")
+                else:
+                    print(f"Validation accuracy improved to {best_val_accuracy:.2f}%, saving model.")
             else:
                 epochs_without_improvement += 1
                 if epochs_without_improvement >= patience:
-                    print("Early stopping triggered.")
+                    if use_chinese:
+                        print("触发早停。")
+                    else:
+                        print("Early stopping triggered.")
                     break
 
         print("Training finished for unlabeled ratio:", unlabeled_ratio)
+        if use_chinese:
+            print("针对未标记数据比例的训练已完成:", unlabeled_ratio)
         StudentNet.load_state_dict(best_model_wts)
         torch.save(StudentNet.state_dict(), f'student_net_unlabeled_{unlabeled_ratio:.1f}.pth')
-        print(f"Best model saved to student_net_unlabeled_{unlabeled_ratio:.1f}.pth")
+        if use_chinese:
+            print(f"最佳模型已保存至 student_net_unlabeled_{unlabeled_ratio:.1f}.pth")
+        else:
+            print(f"Best model saved to student_net_unlabeled_{unlabeled_ratio:.1f}.pth")
         all_results[unlabeled_ratio] = best_val_accuracy
 
-    print("\n"+"="*40)
-    print("Final Results for Different Unlabeled Ratios:")
-    for ratio, accuracy in all_results.items():
-        print(f"Unlabeled Ratio: {ratio:.1f}, Best Validation Accuracy: {accuracy:.2f}%")
-    print("="*40)
+    print(f"\n{'='*50}")
+    if use_chinese:
+        print("不同未标记比例的最终结果:")
+        for ratio, accuracy in all_results.items():
+            print(f"未标记比例: {ratio:.1f}, 最佳验证精度: {accuracy:.2f}%")
+    else:
+        print("Final Results for Different Unlabeled Ratios:")
+        for ratio, accuracy in all_results.items():
+            print(f"Unlabeled Ratio: {ratio:.1f}, Best Validation Accuracy: {accuracy:.2f}%")
+    print(f"{'='*50}")
 
 if __name__ == '__main__':
-    test_step3()
+    test_step3(use_chinese=True) # 默认使用中文输出，可以设置为 False 使用英文
