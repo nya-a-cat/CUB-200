@@ -7,12 +7,6 @@ from torch.utils.data import DataLoader
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 
-# 设置全局字体大小
-plt.rcParams.update({'font.size': 30})  # 可以尝试 12, 14, 16 或更大的值
-# 全局设置标题字体大小
-
-
-
 def create_semi_supervised_dataloader(dataset, aug1, aug2, unlabeled_ratio=0.6, batch_size=32, shuffle=True, num_workers=0):
     """
     Creates a DataLoader with a portion of unlabeled data.
@@ -102,6 +96,13 @@ def create_semi_supervised_dataloader(dataset, aug1, aug2, unlabeled_ratio=0.6, 
 
 if __name__ == "__main__":
     torch.multiprocessing.freeze_support()
+    # 设置全局字体大小
+    plt.rcParams.update({'font.size': 25})
+    # 全局设置 figure 级别的标题字体大小
+    plt.rcParams['figure.titlesize'] = 25
+    # 全局设置 axes 级别的标题字体大小
+    plt.rcParams['axes.titlesize'] = 25
+
     aug1 = transforms.Compose([
         transforms.RandomResizedCrop(224),
         transforms.RandomHorizontalFlip(),
@@ -165,7 +166,7 @@ if __name__ == "__main__":
             num_samples = aug1_images.size(0)
 
             fig, axes = plt.subplots(num_samples, 3, figsize=(15, 5 * num_samples))
-            fig.suptitle(f'Pseudo-Labels and Confidence (Unlabeled Ratio: {unlabeled_ratio:.2f})', fontsize=16)
+            fig.suptitle(f'Pseudo-Labels and Confidence (Unlabeled Ratio: {unlabeled_ratio:.2f})')
 
             def tensor_to_img(tensor):
                 img = tensor.permute(1, 2, 0).cpu().numpy()
