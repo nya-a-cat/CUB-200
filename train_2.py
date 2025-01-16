@@ -137,67 +137,77 @@ def inverse_transform(transformations):
     # Return the reversed transformations as a Compose object
     return transforms.Compose(reversed_transforms)
 
+if __name__ == "__main__":
+    torch.multiprocessing.freeze_support()
+    aug1 = transforms.Compose([
+        transforms.RandomResizedCrop(224),
+        transforms.RandomHorizontalFlip(),
+        transforms.ColorJitter(0.4, 0.4, 0.4, 0.1),
+        transforms.ToTensor(),
+    ])
 
-aug1 = transforms.Compose([
-    transforms.RandomResizedCrop(224),
-    transforms.RandomHorizontalFlip(),
-    transforms.ColorJitter(0.4, 0.4, 0.4, 0.1),
-    transforms.ToTensor(),
-])
+    aug2 = transforms.Compose([
+        transforms.RandomResizedCrop(224, scale=(0.5, 1.0)),  # 调整裁剪的范围，更大的裁剪变换
+        transforms.RandomHorizontalFlip(),
+        transforms.ColorJitter(brightness=0.6, contrast=0.6, saturation=0.6, hue=0.2),  # 扩大色调变化范围
+        transforms.RandomRotation(30),  # 加入旋转
+        transforms.RandomAffine(degrees=0, translate=(0.2, 0.2)),  # 平移变换，增大范围
+        transforms.ToTensor(),
+    ])
 
-aug2 = transforms.Compose([
-    transforms.RandomResizedCrop(224, scale=(0.5, 1.0)),  # 调整裁剪的范围，更大的裁剪变换
-    transforms.RandomHorizontalFlip(),
-    transforms.ColorJitter(brightness=0.6, contrast=0.6, saturation=0.6, hue=0.2),  # 扩大色调变化范围
-    transforms.RandomRotation(30),  # 加入旋转
-    transforms.RandomAffine(degrees=0, translate=(0.2, 0.2)),  # 平移变换，增大范围
-    transforms.ToTensor(),
-])
+    dataloader = create_contrastive_dataloader(
+        dataset=CUB_200(root='CUB-200', train=True, download=True),
+        aug1=aug1,
+        aug2=aug2,
+        batch_size=32
+    )
 
-dataloader = create_contrastive_dataloader(
-    dataset=CUB_200(root='CUB-200', train=True, download=True),
-    aug1=aug1,
-    aug2=aug2,
-    batch_size=32
-)
+    StudentNet = models.resnet18(pretrained=True)
+    TeacherNet = models.resnet50(pretrained=True)
+    StudentNet.fc = torch.nn.Linear(StudentNet.fc.in_features, 200)
+    TeacherNet.fc = torch.nn.Linear(TeacherNet.fc.in_features, 200)
 
-StudentNet = models.resnet18(pretrained=True)
-TeacherNet = models.resnet50(pretrained=True)
-StudentNet.fc = torch.nn.Linear(StudentNet.fc.in_features, 200)
-TeacherNet.fc = torch.nn.Linear(TeacherNet.fc.in_features, 200)
+    # 注册hook来获取特征图
+    features = {}
 
-# 2.2）把aug1(x)输入StudentNet，其中最后一层feat
-# ure map记为Fs。
-batch = next(iter(dataloader))
-aug_1_image = batch['aug1']
-Fs= StudentNet(aug_1_image)
+    def get_features(name):
+        def hook(model, input, output):
+            features[name] = output
+        return hook
 
-# 2.3）把aug2(x)输入TeacherNet，其中最后一层feature map记为
-# Ft。并使用Conv1x1把通道数量压缩和Fs一致。
-aug_2_image = batch['aug2']
-Ft = TeacherNet(aug_2_image)
-channel_align = torch.nn.Conv2d(2048, 512, kernel_size=1)
-Ft = channel_align(Ft)  # 将teacher特征通道数压缩到和student一致
+    StudentNet.layer4.register_forward_hook(get_features('student_features'))
+    TeacherNet.layer4.register_forward_hook(get_features('teacher_features'))
 
-# 2.4)  添加一个consistency loss: L= || invaug2(Ft) - invaug1(Fs) ||. 其
-# 中，invaug1和invaug2进行数据增强中平面变换的逆变换，例如原本是向右平移，逆就是向左平移。
+    # 获取一批数据
+    batch = next(iter(dataloader))
+    aug_1_image = batch['aug1']
+    aug_2_image = batch['aug2']
 
-invaug1 = inverse_transform(aug1)
-invaug2 = inverse_transform(aug2)
+    # 前向传播获取特征图
+    _ = StudentNet(aug_1_image)
+    Fs = features['student_features']
 
+    _ = TeacherNet(aug_2_image)
+    Ft = features['teacher_features']
 
-consistency_loss = torch.norm(invaug1-invaug2, p=2)
+    # 打印特征图的shape
+    print("Fs shape:", Fs.shape)
+    print("Ft shape before conv:", features['teacher_features'].shape)
 
-print("Aug1 Parameters:")
-print(aug1.__dict__)
+    # 使用1x1卷积调整通道数
+    conv1x1 = torch.nn.Conv2d(Ft.size(1), Fs.size(1), 1)
+    Ft = conv1x1(Ft)
 
-print("\nAug2 Parameters:")
-print(aug2.__dict__)
+    print("Ft shape after conv:", Ft.shape)
 
-print("\nInverse Aug1 Parameters:")
-print(invaug1.__dict__)
+    # 进行逆变换
+    transform_of_invaug1 = inverse_transform(aug1)
+    transform_of_invaug2 = inverse_transform(aug2)
 
-print("\nInverse Aug2 Parameters:")
-print(invaug2.__dict__)
+    # 应用逆变换
+    Fs_inv = transform_of_invaug1(Fs)
+    Ft_inv = transform_of_invaug2(Ft)
 
-print(consistency_loss)
+    # 计算一致性损失
+    consistency_loss = torch.norm(Ft_inv - Fs_inv, p=2)
+    print(f"Consistency Loss: {consistency_loss.item()}")
