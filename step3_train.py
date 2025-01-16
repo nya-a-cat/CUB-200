@@ -1,4 +1,3 @@
-# step3_test.py
 import step2
 import torch
 import torchvision.transforms as transforms
@@ -64,7 +63,7 @@ def create_semi_supervised_dataloader(dataset, aug1, aug2, unlabeled_ratio=0.6, 
     )
     return dataloader
 
-def test_step3(use_chinese=False):
+def step3_trian(use_chinese=False):
     torch.multiprocessing.freeze_support()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -127,7 +126,8 @@ def test_step3(use_chinese=False):
 
         # 加载 TeacherNet 权重
         teacher_weights_path = 'model_checkpoints/best_model.pth'
-        TeacherNet.load_state_dict(torch.load(teacher_weights_path))
+        checkpoint = torch.load(teacher_weights_path)
+        TeacherNet.load_state_dict(checkpoint['model_state_dict'])
         TeacherNet.eval()
         print(f"Loaded TeacherNet weights from '{teacher_weights_path}'.")
         if use_chinese:
@@ -328,4 +328,4 @@ def test_step3(use_chinese=False):
     print(f"{'='*50}")
 
 if __name__ == '__main__':
-    test_step3(use_chinese=True)
+    step3_trian(use_chinese=True)
