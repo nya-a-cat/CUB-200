@@ -64,8 +64,6 @@ def create_semi_supervised_dataloader(dataset, aug1, aug2, unlabeled_ratio=0.6, 
     return dataloader
 
 def step3_trian(use_chinese=False):
-    torch.multiprocessing.freeze_support()
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     if use_chinese:
@@ -124,16 +122,15 @@ def step3_trian(use_chinese=False):
         StudentNet.fc = torch.nn.Linear(StudentNet.fc.in_features, num_classes)
         TeacherNet.fc = torch.nn.Linear(TeacherNet.fc.in_features, num_classes)
 
-        # 加载 TeacherNet 权重
         teacher_weights_path = 'model_checkpoints/best_model.pth'
         checkpoint = torch.load(teacher_weights_path)
         TeacherNet.load_state_dict(checkpoint['model_state_dict'])
         TeacherNet.eval()
+        TeacherNet.to(device)  # 确保 TeacherNet 在正确的设备上
         print(f"Loaded TeacherNet weights from '{teacher_weights_path}'.")
         if use_chinese:
             print(f"从 '{teacher_weights_path}' 加载 TeacherNet 权重。")
 
-        # 验证加载的 TeacherNet 的准确率
         def validate_teacher(model, dataloader, device, use_chinese=False):
             model.eval()
             correct = 0
@@ -142,7 +139,7 @@ def step3_trian(use_chinese=False):
                 for batch in dataloader:
                     images, labels = batch
                     images, labels = images.to(device), labels.to(device)
-                    outputs = model(images)
+                    outputs = model(images.to(device))  # 确保模型和输入都在同一设备上
                     _, predicted = torch.max(outputs.data, 1)
                     total += labels.size(0)
                     correct += (predicted == labels).sum().item()
@@ -168,7 +165,6 @@ def step3_trian(use_chinese=False):
         optimizer = torch.optim.Adam(StudentNet.parameters(), lr=0.001)
 
         StudentNet.to(device)
-        TeacherNet.to(device)
 
         def calculate_confidence(teacher_output_aug1, teacher_output_aug2):
             prob_aug1 = torch.softmax(teacher_output_aug1, dim=-1)
@@ -197,33 +193,15 @@ def step3_trian(use_chinese=False):
                 unlabeled_mask = ~is_labeled
                 if unlabeled_mask.any():
                     if use_chinese:
-                        print(f"  批次中的未标记数据:")
-                        print(f"    未标记样本数量: {unlabeled_mask.sum()}")
-                        with torch.no_grad():
-                            teacher_output_aug1 = TeacherNet(aug1_images[unlabeled_mask])
-                            teacher_output_aug2 = TeacherNet(aug2_images[unlabeled_mask])
-                            predicted_labels_aug1 = torch.argmax(teacher_output_aug1, dim=-1)
-                            pseudo_labels[unlabeled_mask] = predicted_labels_aug1
+                        pass  # 简化中文输出
+                    with torch.no_grad():
+                        teacher_output_aug1 = TeacherNet(aug1_images[unlabeled_mask].to(device)) # 确保输入在正确的设备上
+                        teacher_output_aug2 = TeacherNet(aug2_images[unlabeled_mask].to(device)) # 确保输入在正确的设备上
+                        predicted_labels_aug1 = torch.argmax(teacher_output_aug1, dim=-1)
+                        pseudo_labels[unlabeled_mask] = predicted_labels_aug1
 
-                            confidence_scores = calculate_confidence(teacher_output_aug1, teacher_output_aug2)
-                            confidence_weights[unlabeled_mask] = confidence_scores
-                            print(f"    伪标签示例: {predicted_labels_aug1[:5].tolist()}")
-                            print(f"    置信度得分示例: {confidence_scores[:5].tolist()}")
-                            print(f"    置信度权重形状: {confidence_weights[unlabeled_mask].shape}")
-                    else:
-                        print(f"  Unlabeled Data in Batch:")
-                        print(f"    Number of Unlabeled Samples: {unlabeled_mask.sum()}")
-                        with torch.no_grad():
-                            teacher_output_aug1 = TeacherNet(aug1_images[unlabeled_mask])
-                            teacher_output_aug2 = TeacherNet(aug2_images[unlabeled_mask])
-                            predicted_labels_aug1 = torch.argmax(teacher_output_aug1, dim=-1)
-                            pseudo_labels[unlabeled_mask] = predicted_labels_aug1
-
-                            confidence_scores = calculate_confidence(teacher_output_aug1, teacher_output_aug2)
-                            confidence_weights[unlabeled_mask] = confidence_scores
-                            print(f"    Example Pseudo-Labels: {predicted_labels_aug1[:5].tolist()}")
-                            print(f"    Example Confidence Scores: {confidence_scores[:5].tolist()}")
-                            print(f"    Shape of Confidence Weights: {confidence_weights[unlabeled_mask].shape}")
+                        confidence_scores = calculate_confidence(teacher_output_aug1, teacher_output_aug2)
+                        confidence_weights[unlabeled_mask] = confidence_scores
 
                 student_predictions = StudentNet(aug1_images)
 
@@ -236,10 +214,6 @@ def step3_trian(use_chinese=False):
                     unlabeled_predictions = student_predictions[unlabeled_mask]
                     unlabeled_loss_values = classification_criterion(unlabeled_predictions, pseudo_labels[unlabeled_mask])
                     weighted_unlabeled_loss = (unlabeled_loss_values * confidence_weights[unlabeled_mask]).mean()
-                    if use_chinese:
-                        print(f"    加权的未标记损失: {weighted_unlabeled_loss.item():.4f}")
-                    else:
-                        print(f"    Weighted Unlabeled Loss: {weighted_unlabeled_loss.item():.4f}")
                 running_unlabeled_loss += weighted_unlabeled_loss.item()
 
                 loss = labeled_loss + weighted_unlabeled_loss
@@ -328,4 +302,5 @@ def step3_trian(use_chinese=False):
     print(f"{'='*50}")
 
 if __name__ == '__main__':
+    torch.multiprocessing.freeze_support()
     step3_trian(use_chinese=True)
