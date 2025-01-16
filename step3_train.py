@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 import torch.nn.functional as F
 import copy
 
-def create_semi_supervised_dataloader(dataset, aug1, aug2, unlabeled_ratio=0.6, batch_size=32, shuffle=True, num_workers=0):
+def create_semi_supervised_dataloader(dataset, aug1, aug2, unlabeled_ratio=0.6, batch_size=32, shuffle=True, num_workers=0, pin_memory=False):
     """
     Creates a DataLoader with a portion of unlabeled data.
 
@@ -19,6 +19,7 @@ def create_semi_supervised_dataloader(dataset, aug1, aug2, unlabeled_ratio=0.6, 
         batch_size: Number of samples per batch
         shuffle: Whether to shuffle the data
         num_workers: Number of worker processes for data loading
+        pin_memory: Whether to pin memory for faster GPU transfer
 
     Returns:
         DataLoader that yields dictionaries containing:
@@ -77,12 +78,17 @@ def create_semi_supervised_dataloader(dataset, aug1, aug2, unlabeled_ratio=0.6, 
         semi_dataset,
         batch_size=batch_size,
         shuffle=shuffle,
-        num_workers=num_workers
+        num_workers=num_workers,
+        pin_memory=pin_memory  # 添加 pin_memory 参数
     )
     return dataloader
 
 def test_step3():
     torch.multiprocessing.freeze_support()
+
+    # 检查 GPU 是否可用并设置设备
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
 
     aug1 = transforms.Compose([
         transforms.RandomResizedCrop(224),
@@ -110,16 +116,24 @@ def test_step3():
         print(f"Experiment with Unlabeled Ratio: {unlabeled_ratio}")
         print(f"{'='*40}")
         train_dataset = CUB_200(root='CUB-200', train=True, download=True)
-        val_dataset = CUB_200(root='CUB-200', train=False, download=True)
+
+        val_transform = transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+        val_dataset = CUB_200(root='CUB-200', train=False, download=True, transform=val_transform)
 
         semi_dataloader = create_semi_supervised_dataloader(
             dataset=train_dataset,
             aug1=aug1,
             aug2=aug2,
             unlabeled_ratio=unlabeled_ratio,
-            batch_size=64
+            batch_size=64,
+            pin_memory=True  # 启用 pin_memory
         )
-        val_dataloader = DataLoader(val_dataset, batch_size=64, shuffle=False, num_workers=4)
+        val_dataloader = DataLoader(val_dataset, batch_size=64, shuffle=False, num_workers=4, pin_memory=True) # 验证集也启用
 
         StudentNet = step2.models.resnet18(pretrained=True)
         TeacherNet = step2.models.resnet50(pretrained=True)
@@ -135,9 +149,11 @@ def test_step3():
 
         classification_criterion = torch.nn.CrossEntropyLoss(ignore_index=-1, reduction='none')
         optimizer = torch.optim.Adam(StudentNet.parameters(), lr=0.001)
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        # 将模型移动到 GPU
         StudentNet.to(device)
         TeacherNet.to(device)
+        classification_criterion.to(device) # 损失函数也移动到 GPU (如果需要)
 
         def calculate_confidence(teacher_output_aug1, teacher_output_aug2):
             prob_aug1 = torch.softmax(teacher_output_aug1, dim=-1)
@@ -148,6 +164,7 @@ def test_step3():
         def train_one_epoch(epoch):
             StudentNet.train()
             for i, batch in enumerate(semi_dataloader):
+                # 将数据移动到 GPU
                 aug1_images = batch['aug1'].to(device)
                 aug2_images = batch['aug2'].to(device)
                 labels = batch['label'].to(device)
@@ -190,6 +207,7 @@ def test_step3():
             total = 0
             with torch.no_grad():
                 for batch in val_dataloader:
+                    # 将验证数据移动到 GPU
                     images, labels = batch
                     images, labels = images.to(device), labels.to(device)
                     outputs = StudentNet(images)
