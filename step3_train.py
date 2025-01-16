@@ -6,6 +6,7 @@ from writing_custom_datasets import CUB_200
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 import copy
+import time
 
 def create_semi_supervised_dataloader(dataset, aug1, aug2, unlabeled_ratio=0.6, batch_size=32, shuffle=True, num_workers=0, pin_memory=False):
     """
@@ -79,14 +80,13 @@ def create_semi_supervised_dataloader(dataset, aug1, aug2, unlabeled_ratio=0.6, 
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
-        pin_memory=pin_memory  # 添加 pin_memory 参数
+        pin_memory=pin_memory
     )
     return dataloader
 
 def test_step3():
     torch.multiprocessing.freeze_support()
 
-    # 检查 GPU 是否可用并设置设备
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
@@ -131,9 +131,9 @@ def test_step3():
             aug2=aug2,
             unlabeled_ratio=unlabeled_ratio,
             batch_size=64,
-            pin_memory=True  # 启用 pin_memory
+            pin_memory=True
         )
-        val_dataloader = DataLoader(val_dataset, batch_size=64, shuffle=False, num_workers=4, pin_memory=True) # 验证集也启用
+        val_dataloader = DataLoader(val_dataset, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
 
         StudentNet = step2.models.resnet18(pretrained=True)
         TeacherNet = step2.models.resnet50(pretrained=True)
@@ -147,13 +147,11 @@ def test_step3():
             param.requires_grad = False
         print("TeacherNet parameters frozen.")
 
-        classification_criterion = torch.nn.CrossEntropyLoss(ignore_index=-1, reduction='none')
+        classification_criterion = torch.nn.CrossEntropyLoss(ignore_index=-1, reduction='none').to(device)
         optimizer = torch.optim.Adam(StudentNet.parameters(), lr=0.001)
 
-        # 将模型移动到 GPU
         StudentNet.to(device)
         TeacherNet.to(device)
-        classification_criterion.to(device) # 损失函数也移动到 GPU (如果需要)
 
         def calculate_confidence(teacher_output_aug1, teacher_output_aug2):
             prob_aug1 = torch.softmax(teacher_output_aug1, dim=-1)
@@ -161,10 +159,14 @@ def test_step3():
             confidence = 1.0 - torch.abs(prob_aug1 - prob_aug2).sum(dim=-1)
             return confidence
 
-        def train_one_epoch(epoch):
+        def train_one_epoch(epoch, semi_dataloader, StudentNet, TeacherNet, optimizer, classification_criterion, device):
             StudentNet.train()
+            running_labeled_loss = 0.0
+            running_unlabeled_loss = 0.0
+            total_batches = len(semi_dataloader)
+            start_time = time.time()
+
             for i, batch in enumerate(semi_dataloader):
-                # 将数据移动到 GPU
                 aug1_images = batch['aug1'].to(device)
                 aug2_images = batch['aug2'].to(device)
                 labels = batch['label'].to(device)
@@ -177,6 +179,8 @@ def test_step3():
 
                 unlabeled_mask = ~is_labeled
                 if unlabeled_mask.any():
+                    print(f"  Unlabeled Data in Batch:")
+                    print(f"    Number of Unlabeled Samples: {unlabeled_mask.sum()}")
                     with torch.no_grad():
                         teacher_output_aug1 = TeacherNet(aug1_images[unlabeled_mask])
                         teacher_output_aug2 = TeacherNet(aug2_images[unlabeled_mask])
@@ -185,21 +189,35 @@ def test_step3():
 
                         confidence_scores = calculate_confidence(teacher_output_aug1, teacher_output_aug2)
                         confidence_weights[unlabeled_mask] = confidence_scores
+                        print(f"    Example Pseudo-Labels: {predicted_labels_aug1[:5].tolist()}")
+                        print(f"    Example Confidence Scores: {confidence_scores[:5].tolist()}")
+                        print(f"    Shape of Confidence Weights: {confidence_weights[unlabeled_mask].shape}")
 
                 student_predictions = StudentNet(aug1_images)
 
                 labeled_mask_tensor = is_labeled.to(device)
                 labeled_loss = (classification_criterion(student_predictions[labeled_mask_tensor], labels[labeled_mask_tensor])).mean() if labeled_mask_tensor.any() else torch.tensor(0.0).to(device)
+                running_labeled_loss += labeled_loss.item()
 
                 weighted_unlabeled_loss = torch.tensor(0.0).to(device)
                 if unlabeled_mask.any():
                     unlabeled_predictions = student_predictions[unlabeled_mask]
                     unlabeled_loss_values = classification_criterion(unlabeled_predictions, pseudo_labels[unlabeled_mask])
                     weighted_unlabeled_loss = (unlabeled_loss_values * confidence_weights[unlabeled_mask]).mean()
+                    print(f"    Weighted Unlabeled Loss: {weighted_unlabeled_loss.item():.4f}")
+                running_unlabeled_loss += weighted_unlabeled_loss.item()
 
                 loss = labeled_loss + weighted_unlabeled_loss
                 loss.backward()
                 optimizer.step()
+
+                if (i + 1) % 10 == 0:
+                    print(f"Epoch [{epoch+1}], Batch [{i+1}/{total_batches}], Labeled Loss: {labeled_loss.item():.4f}, Unlabeled Loss: {weighted_unlabeled_loss.item():.4f}")
+
+            epoch_duration = time.time() - start_time
+            avg_labeled_loss = running_labeled_loss / total_batches
+            avg_unlabeled_loss = running_unlabeled_loss / total_batches
+            print(f"Epoch [{epoch+1}] finished in {epoch_duration:.2f} seconds, Avg Labeled Loss: {avg_labeled_loss:.4f}, Avg Unlabeled Loss: {avg_unlabeled_loss:.4f}")
 
         def validate():
             StudentNet.eval()
@@ -207,7 +225,6 @@ def test_step3():
             total = 0
             with torch.no_grad():
                 for batch in val_dataloader:
-                    # 将验证数据移动到 GPU
                     images, labels = batch
                     images, labels = images.to(device), labels.to(device)
                     outputs = StudentNet(images)
@@ -225,10 +242,10 @@ def test_step3():
 
         print("Starting training...")
         for epoch in range(num_epochs):
-            train_one_epoch(epoch)
+            train_one_epoch(epoch, semi_dataloader, StudentNet, TeacherNet, optimizer, classification_criterion, device)
             current_val_accuracy = validate()
 
-            if current_val_accuracy > best_val_accuracy * 1.01: # 1% improvement
+            if current_val_accuracy > best_val_accuracy * 1.01:
                 best_val_accuracy = current_val_accuracy
                 best_model_wts = copy.deepcopy(StudentNet.state_dict())
                 epochs_without_improvement = 0
