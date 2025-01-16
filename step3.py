@@ -2,7 +2,7 @@
 import step2
 import torch
 import torchvision.transforms as transforms
-from writing_custom_datasets import CUB_200
+from writing_custom_datasets import CUB_200  # Import the CUB_200 dataset
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
@@ -24,12 +24,14 @@ def create_semi_supervised_dataloader(dataset, aug1, aug2, unlabeled_ratio=0.6, 
         DataLoader that yields dictionaries containing:
             - 'aug1': First augmented view
             - 'aug2': Second augmented view
-            - 'label': Original label (or None if unlabeled)
+            - 'label': Original label (or -1 if unlabeled)
             - 'is_labeled': Boolean indicating if the sample is labeled
     """
+    print("Creating semi-supervised DataLoader...")
 
     class SemiSupervisedDataset(torch.utils.data.Dataset):
         def __init__(self, base_dataset, augmentation1, augmentation2, unlabeled_ratio):
+            print("Initializing SemiSupervisedDataset...")
             self.base_dataset = base_dataset
             self.aug1 = augmentation1
             self.aug2 = augmentation2
@@ -37,19 +39,25 @@ def create_semi_supervised_dataloader(dataset, aug1, aug2, unlabeled_ratio=0.6, 
             self.labeled_indices = []
             self.unlabeled_indices = []
             self._prepare_data()
+            print("SemiSupervisedDataset initialized.")
 
         def _prepare_data(self):
+            print("Preparing semi-supervised data...")
             images_by_class = {}
             for idx in range(len(self.base_dataset)):
-                img, label_int = self.base_dataset[idx]  # Access data using [] indexing
+                image, label_int = self.base_dataset[idx]
                 if label_int not in images_by_class:
                     images_by_class[label_int] = []
-                images_by_class[label_int].append((self.base_dataset.filenames[idx], idx))
+                # Store filename and original index
+                filename = self.base_dataset.filtered_paths[idx].split('/')[-1]
+                images_by_class[label_int].append((filename, idx))
 
             for label_int, items in images_by_class.items():
+                # Sort by filename
                 sorted_items = sorted(items, key=lambda x: x[0])
                 num_samples = len(sorted_items)
                 num_unlabeled = int(unlabeled_ratio * num_samples)
+                print(f"Class {label_int}: Total {num_samples} images, marking first {num_unlabeled} as unlabeled.")
                 for i, (filename, original_index) in enumerate(sorted_items):
                     if i < num_unlabeled:
                         self.unlabeled_indices.append(original_index)
@@ -59,6 +67,7 @@ def create_semi_supervised_dataloader(dataset, aug1, aug2, unlabeled_ratio=0.6, 
             print(f"Number of labeled samples: {len(self.labeled_indices)}")
             print(f"Number of unlabeled samples: {len(self.unlabeled_indices)}")
             self.all_indices = self.labeled_indices + self.unlabeled_indices
+            print("Semi-supervised data preparation complete.")
 
         def __getitem__(self, idx):
             original_index = self.all_indices[idx]
@@ -67,7 +76,7 @@ def create_semi_supervised_dataloader(dataset, aug1, aug2, unlabeled_ratio=0.6, 
             return {
                 'aug1': self.aug1(image),
                 'aug2': self.aug2(image),
-                'label': label if is_labeled else -1,  # Use a placeholder for unlabeled
+                'label': label if is_labeled else -1,  # Use -1 as placeholder for unlabeled
                 'is_labeled': is_labeled
             }
 
@@ -75,12 +84,15 @@ def create_semi_supervised_dataloader(dataset, aug1, aug2, unlabeled_ratio=0.6, 
             return len(self.all_indices)
 
     semi_dataset = SemiSupervisedDataset(dataset, aug1, aug2, unlabeled_ratio)
-    return DataLoader(
+    print("Creating DataLoader instance...")
+    dataloader = DataLoader(
         semi_dataset,
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers
     )
+    print("DataLoader created.")
+    return dataloader
 
 if __name__ == "__main__":
     torch.multiprocessing.freeze_support()
@@ -105,7 +117,9 @@ if __name__ == "__main__":
     R_values = [0.4, 0.6, 0.8]
 
     for unlabeled_ratio in R_values:
-        print(f"\nExperiment with Unlabeled Ratio: {unlabeled_ratio}")
+        print(f"\n{'='*40}")
+        print(f"Experiment with Unlabeled Ratio: {unlabeled_ratio}")
+        print(f"{'='*40}")
         train_dataset = CUB_200(root='CUB-200', train=True, download=True)
         semi_dataloader = create_semi_supervised_dataloader(
             dataset=train_dataset,
@@ -121,11 +135,13 @@ if __name__ == "__main__":
         StudentNet.fc = torch.nn.Linear(StudentNet.fc.in_features, num_classes)
         TeacherNet.fc = torch.nn.Linear(TeacherNet.fc.in_features, num_classes)
         TeacherNet.eval()  # Set TeacherNet to eval mode
+        print("StudentNet and TeacherNet initialized.")
 
         for param in TeacherNet.parameters():
             param.requires_grad = False
+        print("TeacherNet parameters frozen.")
 
-        classification_criterion = torch.nn.CrossEntropyLoss(reduction='none') # Keep individual losses
+        classification_criterion = torch.nn.CrossEntropyLoss(ignore_index=-1, reduction='none') # Keep individual losses
 
         def calculate_confidence(teacher_output_aug1, teacher_output_aug2):
             """Calculates confidence based on the difference between teacher's predictions."""
@@ -142,7 +158,7 @@ if __name__ == "__main__":
             num_samples = aug1_images.size(0)
 
             fig, axes = plt.subplots(num_samples, 3, figsize=(15, 5 * num_samples))
-            fig.suptitle(f'Pseudo-Labels and Confidence (Unlabeled Ratio: {unlabeled_ratio})', fontsize=16)
+            fig.suptitle(f'Pseudo-Labels and Confidence (Unlabeled Ratio: {unlabeled_ratio:.2f})', fontsize=16)
 
             def tensor_to_img(tensor):
                 img = tensor.permute(1, 2, 0).cpu().numpy()
@@ -151,59 +167,78 @@ if __name__ == "__main__":
 
             for i in range(num_samples):
                 axes[i, 0].imshow(tensor_to_img(aug1_images[i]))
-                title = "Labeled" if is_labeled[i] else f"Unlabeled\nPseudo-label: {torch.argmax(teacher_preds_aug1[i]).item()}"
+                title = "Labeled" if is_labeled[i] else f"Unlabeled\nPseudo-label (aug1): {torch.argmax(teacher_preds_aug1[i]).item()}" if teacher_preds_aug1 is not None and teacher_preds_aug1.size(0) > i else "Unlabeled"
                 axes[i, 0].set_title(title)
                 axes[i, 0].axis('off')
 
                 axes[i, 1].imshow(tensor_to_img(aug2_images[i]))
-                title = "Labeled" if is_labeled[i] else f"Unlabeled\nPseudo-label: {torch.argmax(teacher_preds_aug2[i]).item()}"
+                title = "Labeled" if is_labeled[i] else f"Unlabeled\nPseudo-label (aug2): {torch.argmax(teacher_preds_aug2[i]).item()}" if teacher_preds_aug2 is not None and teacher_preds_aug2.size(0) > i else "Unlabeled"
                 axes[i, 1].set_title(title)
                 axes[i, 1].axis('off')
 
                 if not is_labeled[i]:
-                    axes[i, 2].text(0.5, 0.5, f"Confidence: {confidence_scores[i].item():.4f}", ha='center', va='center')
+                    conf_text = f"Confidence: {confidence_scores[i].item():.4f}" if confidence_scores is not None and confidence_scores.size(0) > i else ""
+                    axes[i, 2].text(0.5, 0.5, conf_text, ha='center', va='center')
+                else:
+                    axes[i, 2].text(0.5, 0.5, "Labeled Data", ha='center', va='center')
                 axes[i, 2].axis('off')
 
             plt.tight_layout()
             plt.show()
 
+        print("Starting iteration over DataLoader...")
         # Example usage of the semi-supervised dataloader and pseudo-labeling
         for i, batch in enumerate(semi_dataloader):
+            print(f"\n--- Batch {i+1} ---")
             aug1_images = batch['aug1']
             aug2_images = batch['aug2']
             labels = batch['label']
             is_labeled = batch['is_labeled']
 
+            print("Batch loaded.")
             # 3.1) 当data_loader吐出的样本无标签的时候，使用TeacherNet预测的类别当作伪标签
             pseudo_labels = torch.zeros_like(labels)
             confidence_weights = torch.ones_like(labels, dtype=torch.float)
 
+            teacher_output_aug1 = None
+            teacher_output_aug2 = None
+            confidence_scores = None
+
             unlabeled_mask = ~is_labeled
             if unlabeled_mask.any():
+                print("Unlabeled data found in the batch. Generating pseudo-labels...")
                 with torch.no_grad():
                     teacher_output_aug1 = TeacherNet(aug1_images[unlabeled_mask])
                     teacher_output_aug2 = TeacherNet(aug2_images[unlabeled_mask])
-                    pseudo_labels[unlabeled_mask] = torch.argmax(teacher_output_aug1, dim=-1)
+                    predicted_labels_aug1 = torch.argmax(teacher_output_aug1, dim=-1)
+                    predicted_labels_aug2 = torch.argmax(teacher_output_aug2, dim=-1)
+                    pseudo_labels[unlabeled_mask] = predicted_labels_aug1 # Using predictions from aug1
 
                     # 3.2) 使用TeacherNet在aug1(x)和aug2(x)上预测结果的差异来衡量伪标签的置信度
                     confidence_scores = calculate_confidence(teacher_output_aug1, teacher_output_aug2)
                     confidence_weights[unlabeled_mask] = confidence_scores
+                print("Pseudo-labels and confidence scores generated.")
 
-                # 3.3) 设计可视化来显示伪标签及其置信度. Only visualize if there are unlabeled samples
-                visualize_pseudo_labels(
-                    batch,
-                    teacher_output_aug1,
-                    teacher_output_aug2,
-                    confidence_scores
-                )
-                break # Visualize only the first batch for brevity
+            # 3.3) 设计可视化来显示伪标签及其置信度. Only visualize if there are unlabeled samples
+            print("Visualizing pseudo-labels and confidence...")
+            visualize_pseudo_labels(
+                batch,
+                teacher_output_aug1,
+                teacher_output_aug2,
+                confidence_scores
+            )
+            print("Visualization complete.")
 
             # You would typically use pseudo_labels and confidence_weights in your training loop
-            # For example, when calculating the classification loss for unlabeled data:
-            # if unlabeled_mask.any():
-            #     unlabeled_predictions = StudentNet(aug1_images[unlabeled_mask])
-            #     unlabeled_loss = classification_criterion(unlabeled_predictions, pseudo_labels[unlabeled_mask])
-            #     weighted_unlabeled_loss = (unlabeled_loss * confidence_weights[unlabeled_mask]).mean()
+            if unlabeled_mask.any():
+                print("Calculating weighted unlabeled loss (example)...")
+                unlabeled_predictions = StudentNet(aug1_images[unlabeled_mask])
+                # Use pseudo_labels and confidence_weights for loss calculation
+                unlabeled_loss = classification_criterion(unlabeled_predictions, pseudo_labels[unlabeled_mask])
+                weighted_unlabeled_loss = (unlabeled_loss * confidence_weights[unlabeled_mask]).mean()
+                print(f"Weighted Unlabeled Loss: {weighted_unlabeled_loss.item()}")
 
             if i > 2:  # Process only a few batches for demonstration
+                print("Stopping after a few batches for demonstration.")
                 break
+        print("Finished iteration over DataLoader.")
