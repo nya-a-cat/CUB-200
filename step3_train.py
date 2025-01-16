@@ -167,9 +167,10 @@ def step3_trian(use_chinese=False):
         StudentNet.to(device)
 
         def calculate_confidence(teacher_output_aug1, teacher_output_aug2):
-            prob_aug1 = torch.softmax(teacher_output_aug1, dim=-1)
-            prob_aug2 = torch.softmax(teacher_output_aug2, dim=-1)
-            confidence = 1.0 - torch.abs(prob_aug1 - prob_aug2).sum(dim=-1)
+            prob_aug1 = F.softmax(teacher_output_aug1, dim=-1)
+            prob_aug2 = F.softmax(teacher_output_aug2, dim=-1)
+            l1_distance = torch.sum(torch.abs(prob_aug1 - prob_aug2), dim=-1)
+            confidence = 1.0 - l1_distance / 2.0
             return confidence
 
         def train_one_epoch(epoch, semi_dataloader, StudentNet, TeacherNet, optimizer, classification_criterion, device, use_chinese=False):
