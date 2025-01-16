@@ -12,6 +12,11 @@ from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
 
+# 设置全局字体大小
+plt.rcParams.update({'font.size': 30})  # 可以尝试 12, 14, 16 或更大的值
+# 全局设置标题字体大小
+plt.rcParams['axes.titlesize'] = 30  # 你可以尝试 16, 18, 20 或更大的值
+
 def create_contrastive_dataloader(dataset,aug1,aug2,batch_size=32,shuffle=True,num_workers=0
 ):
     """

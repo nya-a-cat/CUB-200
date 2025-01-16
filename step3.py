@@ -7,6 +7,12 @@ from torch.utils.data import DataLoader
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 
+# 设置全局字体大小
+plt.rcParams.update({'font.size': 30})  # 可以尝试 12, 14, 16 或更大的值
+# 全局设置标题字体大小
+
+
+
 def create_semi_supervised_dataloader(dataset, aug1, aug2, unlabeled_ratio=0.6, batch_size=32, shuffle=True, num_workers=0):
     """
     Creates a DataLoader with a portion of unlabeled data.
@@ -49,14 +55,14 @@ def create_semi_supervised_dataloader(dataset, aug1, aug2, unlabeled_ratio=0.6, 
                 if label_int not in images_by_class:
                     images_by_class[label_int] = []
                 # Store filename and original index
-                filename = self.base_dataset.filtered_paths[idx].split('/')[-1]
-                images_by_class[label_int].append((filename, idx))
+                filename = self.base_dataset.filtered_info.iloc[idx]['filepath']
+                images_by_class[label_int].append((filename.split('/')[-1], idx))
 
             for label_int, items in images_by_class.items():
                 # Sort by filename
                 sorted_items = sorted(items, key=lambda x: x[0])
                 num_samples = len(sorted_items)
-                num_unlabeled = int(unlabeled_ratio * num_samples)
+                num_unlabeled = int(self.unlabeled_ratio * num_samples)
                 print(f"Class {label_int}: Total {num_samples} images, marking first {num_unlabeled} as unlabeled.")
                 for i, (filename, original_index) in enumerate(sorted_items):
                     if i < num_unlabeled:
@@ -114,6 +120,7 @@ if __name__ == "__main__":
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
+    # 3.4) 分别取 R=0.4, 0.6, 0.8 进行实验
     R_values = [0.4, 0.6, 0.8]
 
     for unlabeled_ratio in R_values:
