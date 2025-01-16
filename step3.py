@@ -6,6 +6,7 @@ from writing_custom_datasets import CUB_200  # Import the CUB_200 dataset
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 
 def create_semi_supervised_dataloader(dataset, aug1, aug2, unlabeled_ratio=0.6, batch_size=32, shuffle=True, num_workers=0):
     """
@@ -94,7 +95,7 @@ def create_semi_supervised_dataloader(dataset, aug1, aug2, unlabeled_ratio=0.6, 
     print("DataLoader created.")
     return dataloader
 
-if __name__ == "__main__":
+def test_step3():
     torch.multiprocessing.freeze_support()
     # 设置全局字体大小
     plt.rcParams.update({'font.size': 25})
@@ -165,7 +166,7 @@ if __name__ == "__main__":
             is_labeled = batch['is_labeled'].cpu().numpy()
             num_samples = aug1_images.size(0)
 
-            fig, axes = plt.subplots(num_samples, 3, figsize=(15, 5 * num_samples))
+            fig, axes = plt.subplots(num_samples, 3, figsize=(18, 6 * num_samples))  # Adjust figsize for better spacing
             fig.suptitle(f'Pseudo-Labels and Confidence (Unlabeled Ratio: {unlabeled_ratio:.2f})')
 
             def tensor_to_img(tensor):
@@ -174,24 +175,44 @@ if __name__ == "__main__":
                 return img
 
             for i in range(num_samples):
-                axes[i, 0].imshow(tensor_to_img(aug1_images[i]))
-                title = "Labeled" if is_labeled[i] else f"Unlabeled\nPseudo-label (aug1): {torch.argmax(teacher_preds_aug1[i]).item()}" if teacher_preds_aug1 is not None and teacher_preds_aug1.size(0) > i else "Unlabeled"
-                axes[i, 0].set_title(title)
-                axes[i, 0].axis('off')
+                # --- Visualize aug1 ---
+                ax1 = axes[i, 0]
+                img_aug1 = tensor_to_img(aug1_images[i])
+                ax1.imshow(img_aug1)
+                title_aug1 = "Labeled" if is_labeled[i] else f"Unlabeled\nPseudo-label: {torch.argmax(teacher_preds_aug1[i]).item()}" if teacher_preds_aug1 is not None and teacher_preds_aug1.size(0) > i else "Unlabeled"
+                ax1.set_title(title_aug1)
+                ax1.axis('off')
+                # Add border to indicate labeled/unlabeled
+                for spine in ax1.spines.values():
+                    spine.set_edgecolor('green' if is_labeled[i] else 'red')
+                    spine.set_linewidth(2)
 
-                axes[i, 1].imshow(tensor_to_img(aug2_images[i]))
-                title = "Labeled" if is_labeled[i] else f"Unlabeled\nPseudo-label (aug2): {torch.argmax(teacher_preds_aug2[i]).item()}" if teacher_preds_aug2 is not None and teacher_preds_aug2.size(0) > i else "Unlabeled"
-                axes[i, 1].set_title(title)
-                axes[i, 1].axis('off')
+                # --- Visualize aug2 with Confidence ---
+                ax2 = axes[i, 1]
+                img_aug2 = tensor_to_img(aug2_images[i])
+                ax2.imshow(img_aug2)
+                title_aug2 = "Labeled" if is_labeled[i] else f"Unlabeled\nPseudo-label: {torch.argmax(teacher_preds_aug2[i]).item()}" if teacher_preds_aug2 is not None and teacher_preds_aug2.size(0) > i else "Unlabeled"
+                ax2.set_title(title_aug2)
+                ax2.axis('off')
+                # Add border to indicate labeled/unlabeled
+                for spine in ax2.spines.values():
+                    spine.set_edgecolor('green' if is_labeled[i] else 'red')
+                    spine.set_linewidth(2)
 
-                if not is_labeled[i]:
-                    conf_text = f"Confidence: {confidence_scores[i].item():.4f}" if confidence_scores is not None and confidence_scores.size(0) > i else ""
-                    axes[i, 2].text(0.5, 0.5, conf_text, ha='center', va='center')
-                else:
-                    axes[i, 2].text(0.5, 0.5, "Labeled Data", ha='center', va='center')
-                axes[i, 2].axis('off')
+                # Display confidence on the third axis
+                ax3 = axes[i, 2]
+                ax3.axis('off')
+                if not is_labeled[i] and confidence_scores is not None and confidence_scores.size(0) > i:
+                    confidence = confidence_scores[i].item()
+                    cmap = plt.get_cmap('RdYlGn')  # Choose a colormap
+                    color = cmap(confidence)
+                    ax3.set_facecolor(color)
+                    ax3.text(0.5, 0.5, f"Confidence: {confidence:.4f}", ha='center', va='center', fontsize=20)
+                elif is_labeled[i]:
+                    ax3.text(0.5, 0.5, "Labeled Data", ha='center', va='center', fontsize=20, color='green')
 
             plt.tight_layout()
+            plt.subplots_adjust(top=0.92) # Adjust top spacing for suptitle
             plt.show()
 
         print("Starting iteration over DataLoader...")
@@ -250,3 +271,4 @@ if __name__ == "__main__":
                 print("Stopping after a few batches for demonstration.")
                 break
         print("Finished iteration over DataLoader.")
+
