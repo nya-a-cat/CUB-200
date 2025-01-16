@@ -1,4 +1,4 @@
-# step3.py
+# step3_test.py
 import step2
 import torch
 import torchvision.transforms as transforms
