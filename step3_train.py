@@ -69,6 +69,8 @@ def test_step3(use_chinese=False):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+    if use_chinese:
+        print(f"使用的设备: {device}")
 
     aug1 = transforms.Compose([
         transforms.RandomResizedCrop(224),
@@ -94,6 +96,8 @@ def test_step3(use_chinese=False):
     for unlabeled_ratio in R_values:
         print(f"\n{'='*50}")
         print(f"Experiment with Unlabeled Ratio: {unlabeled_ratio}")
+        if use_chinese:
+            print(f"未标记数据比例实验: {unlabeled_ratio}")
         print(f"{'='*50}")
         train_dataset = CUB_200(root='CUB-200', train=True, download=True)
 
@@ -104,6 +108,7 @@ def test_step3(use_chinese=False):
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
         val_dataset = CUB_200(root='CUB-200', train=False, download=True, transform=val_transform)
+        val_dataloader = DataLoader(val_dataset, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
 
         semi_dataloader = create_semi_supervised_dataloader(
             dataset=train_dataset,
@@ -113,14 +118,42 @@ def test_step3(use_chinese=False):
             batch_size=64,
             pin_memory=True
         )
-        val_dataloader = DataLoader(val_dataset, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
 
         StudentNet = step2.models.resnet18(pretrained=True)
         TeacherNet = step2.models.resnet50(pretrained=True)
         num_classes = 200
         StudentNet.fc = torch.nn.Linear(StudentNet.fc.in_features, num_classes)
         TeacherNet.fc = torch.nn.Linear(TeacherNet.fc.in_features, num_classes)
+
+        # 加载 TeacherNet 权重
+        teacher_weights_path = 'model_checkpoints/best_model.pth'
+        TeacherNet.load_state_dict(torch.load(teacher_weights_path))
         TeacherNet.eval()
+        print(f"Loaded TeacherNet weights from '{teacher_weights_path}'.")
+        if use_chinese:
+            print(f"从 '{teacher_weights_path}' 加载 TeacherNet 权重。")
+
+        # 验证加载的 TeacherNet 的准确率
+        def validate_teacher(model, dataloader, device, use_chinese=False):
+            model.eval()
+            correct = 0
+            total = 0
+            with torch.no_grad():
+                for batch in dataloader:
+                    images, labels = batch
+                    images, labels = images.to(device), labels.to(device)
+                    outputs = model(images)
+                    _, predicted = torch.max(outputs.data, 1)
+                    total += labels.size(0)
+                    correct += (predicted == labels).sum().item()
+            accuracy = 100 * correct / total
+            return accuracy
+
+        teacher_accuracy = validate_teacher(TeacherNet, val_dataloader, device, use_chinese)
+        print(f"TeacherNet Validation Accuracy: {teacher_accuracy:.2f}%")
+        if use_chinese:
+            print(f"TeacherNet 验证集准确率: {teacher_accuracy:.2f}%")
+
         print("StudentNet and TeacherNet initialized.")
         if use_chinese:
             print("学生网络和教师网络已初始化。")
@@ -227,15 +260,15 @@ def test_step3(use_chinese=False):
             else:
                 print(f"Epoch [{epoch+1}] finished in {epoch_duration:.2f} seconds, Avg Labeled Loss: {avg_labeled_loss:.4f}, Avg Unlabeled Loss: {avg_unlabeled_loss:.4f}")
 
-        def validate(use_chinese=False):
-            StudentNet.eval()
+        def validate(model, dataloader, device, use_chinese=False):
+            model.eval()
             correct = 0
             total = 0
             with torch.no_grad():
-                for batch in val_dataloader:
+                for batch in dataloader:
                     images, labels = batch
                     images, labels = images.to(device), labels.to(device)
-                    outputs = StudentNet(images)
+                    outputs = model(images)
                     _, predicted = torch.max(outputs.data, 1)
                     total += labels.size(0)
                     correct += (predicted == labels).sum().item()
@@ -253,7 +286,7 @@ def test_step3(use_chinese=False):
             print("开始训练...")
         for epoch in range(num_epochs):
             train_one_epoch(epoch, semi_dataloader, StudentNet, TeacherNet, optimizer, classification_criterion, device, use_chinese)
-            current_val_accuracy = validate(use_chinese)
+            current_val_accuracy = validate(StudentNet, val_dataloader, device, use_chinese)
 
             if current_val_accuracy > best_val_accuracy * 1.01:
                 best_val_accuracy = current_val_accuracy
@@ -295,4 +328,4 @@ def test_step3(use_chinese=False):
     print(f"{'='*50}")
 
 if __name__ == '__main__':
-    test_step3(use_chinese=True) # 默认使用中文输出，可以设置为 False 使用英文
+    test_step3(use_chinese=True)
