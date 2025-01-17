@@ -66,6 +66,30 @@ def tensor_to_img_np(tensor):
     img = (img - img.min()) / (img.max() - img.min() + 1e-8)
     return img
 
+def consistency_loss(invaug2_Ft, invaug1_Fs):
+    """
+    Calculates a consistency loss between two tensors that are expected to be similar
+    after inverse augmentations.
+
+    Args:
+        invaug2_Ft: Tensor after applying inverse augmentation 2 to features Ft.
+        invaug1_Fs: Tensor after applying inverse augmentation 1 to features Fs.
+
+    Returns:
+        torch.Tensor: The consistency loss (scalar).
+
+    Note:
+        This function assumes that `invaug1` and `invaug2` ideally undo transformations
+        that were applied to `Ft` and `Fs` respectively, making them comparable.
+        The specific type of consistency loss (e.g., MSE, L1, Cosine Similarity)
+        can be adjusted based on the specific application. This implementation uses
+        Mean Squared Error (MSE) as a common choice for consistency.
+    """
+    loss = F.mse_loss(invaug2_Ft, invaug1_Fs)
+    return loss
+
+
+
 if __name__ == "__main__":
     torch.multiprocessing.freeze_support()
 
@@ -82,9 +106,19 @@ if __name__ == "__main__":
         transforms.RandomHorizontalFlip(),
         transforms.ColorJitter(brightness=0.6, contrast=0.6, saturation=0.6, hue=0.2),
         transforms.RandomRotation(30),
-        transforms.RandomAffine(degrees=0, translate=(0.2, 0.2)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        transforms.Resize((256, 256))
+    ])
+
+    # Define inverse transforms (focusing on planar transformations)
+    inv_aug1 = transforms.Compose([
+        transforms.RandomHorizontalFlip(p=1.0), # Inverse of horizontal flip is another flip
+        transforms.Resize((256, 256)) # Inverse of resize is resize back, though original size might be needed for perfect reversal
+    ])
+
+    inv_aug2 = transforms.Compose([
+        transforms.RandomHorizontalFlip(p=1.0), # Inverse of horizontal flip
         transforms.Resize((256, 256))
     ])
 
@@ -99,7 +133,7 @@ if __name__ == "__main__":
         transforms.Resize((256, 256)),
         transforms.ToTensor()
     ]))
-    original_dataloader = DataLoader(original_dataset, batch_size=4, shuffle=True)
+    original_dataloader = DataLoader(original_dataset, batch_size=4, shuffle=False)
 
     # Get batches of data
     batch = next(iter(dataloader))
@@ -217,5 +251,89 @@ if __name__ == "__main__":
             if j == 0:
                 ax_teacher_aug.set_title(f'Teacher (Aug2, Aligned)')
             ax_teacher_aug.axis('off')
+    plt.tight_layout()
+    plt.show()
+
+    # Apply inverse augmentations to the *augmented images* and then get the features
+    aug1_images_inv = torch.stack([inv_aug1(img) for img in aug1_images])
+    aug2_images_inv = torch.stack([inv_aug2(img) for img in aug2_images])
+
+    _ = StudentNet(aug1_images_inv)
+    Fs_augmented_inv = features_student['student_features']
+    invaug1_Fs = Fs_augmented_inv  # Assign the variable
+
+    _ = TeacherNet(aug2_images_inv)
+    Ft_augmented_inv = features_teacher['teacher_features']
+    Ft_augmented_inv_aligned = conv1x1_teacher(Ft_augmented_inv)
+    invaug2_Ft = Ft_augmented_inv_aligned  # Assign the variable
+
+    # Calculate consistency loss
+    loss_value = consistency_loss(invaug2_Ft, invaug1_Fs)
+    print(f"Consistency Loss: {loss_value.item()}")
+
+    # --- Visualization for Consistency Loss Verification ---
+    num_samples = original_images.size(0)
+    num_channels_to_visualize = min(8, Fs_augmented.shape[1])
+    num_cols = 1 + 1 + num_channels_to_visualize + 1 + num_channels_to_visualize + 1 + num_channels_to_visualize + 1 + num_channels_to_visualize
+    fig_consistency, axes_consistency = plt.subplots(num_samples, num_cols,
+                                                     figsize=(4 * num_cols, 4 * num_samples))
+    fig_consistency.suptitle('Verification of Consistency Loss', fontsize=16)
+
+    for i in range(num_samples):
+        col = 0
+        # Original Image
+        axes_consistency[i, col].imshow(tensor_to_img_np(original_images[i]))
+        axes_consistency[i, col].set_title(f'Original\nLabel: {original_labels[i].item()}')
+        axes_consistency[i, col].axis('off')
+        col += 1
+
+        # Augmented Image 1 (Student)
+        axes_consistency[i, col].imshow(tensor_to_img_np(aug1_images[i]))
+        axes_consistency[i, col].set_title(f'Aug1 (Student)')
+        axes_consistency[i, col].axis('off')
+        col += 1
+
+        # Feature Map Aug1
+        for j in range(num_channels_to_visualize):
+            axes_consistency[i, col].imshow(Fs_augmented[i, j, :, :].detach().cpu().numpy(), cmap='viridis')
+            if j == 0:
+                axes_consistency[i, col].set_title('Features Aug1')
+            axes_consistency[i, col].axis('off')
+            col += 1
+
+        # Inversely Augmented Image 1
+        axes_consistency[i, col].imshow(tensor_to_img_np(aug1_images_inv[i]))
+        axes_consistency[i, col].set_title(f'Inv Aug1')
+        axes_consistency[i, col].axis('off')
+        col += 1
+
+        # Feature Map Inv Aug1
+        for j in range(num_channels_to_visualize):
+            axes_consistency[i, col].imshow(invaug1_Fs[i, j, :, :].detach().cpu().numpy(), cmap='viridis')
+            if j == 0:
+                axes_consistency[i, col].set_title('Features Inv Aug1')
+            axes_consistency[i, col].axis('off')
+            col += 1
+
+        # Augmented Image 2 (Teacher)
+        axes_consistency[i, col].imshow(tensor_to_img_np(aug2_images[i]))
+        axes_consistency[i, col].set_title(f'Aug2 (Teacher)')
+        axes_consistency[i, col].axis('off')
+        col += 1
+
+        # Feature Map Aug2
+        for j in range(num_channels_to_visualize):
+            axes_consistency[i, col].imshow(Ft_augmented_aligned[i, j, :, :].detach().cpu().numpy(), cmap='viridis')
+            if j == 0:
+                axes_consistency[i, col].set_title('Features Aug2')
+            axes_consistency[i, col].axis('off')
+            col += 1
+
+        # Inversely Augmented Image 2
+        axes_consistency[i, col].imshow(tensor_to_img_np(aug2_images_inv[i]))
+        axes_consistency[i, col].set_title(f'Inv Aug2')
+        axes_consistency[i, col].axis('off')
+        col += 1
+
     plt.tight_layout()
     plt.show()
