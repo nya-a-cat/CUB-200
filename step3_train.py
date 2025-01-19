@@ -7,7 +7,7 @@ import torchvision.transforms.v2 as transforms
 from semi_supervised_dataset import SemiSupervisedCUB200
 from contrastive_dataset import create_contrastive_dataloader
 from custom_transforms import get_augmentation_transforms, get_inverse_transforms
-from utils import consistency_loss, get_features
+from utils import consistency_loss, get_features, visualize_pseudo_labels
 
 def main():
     torch.multiprocessing.freeze_support()
@@ -19,22 +19,23 @@ def main():
     layer_name = 'layer4'
     unlabeled_ratio = 0.6  # 60%的无标签数据
 
-    # 训练轮数和学习率，仅作示例
     epochs = 2
     lr = 1e-3
+
+    # 置信度相关超参数
+    alpha = 5.0  # 控制差异->置信度的衰减
 
     # --- Data Loaders ---
     aug1_transform, aug2_transform = get_augmentation_transforms(size=image_size)
     inverse_aug1_transform, inverse_aug2_transform = get_inverse_transforms()
 
-    # 使用半监督版本的 CUB200 数据集：部分数据label=-1
+    # 使用半监督版本的 CUB200 数据集：部分数据 label=-1
     train_dataset = SemiSupervisedCUB200(
         root='CUB-200',
         train=True,
-        transform=transforms.ToDtype,  # 这里保留你的自定义 transform
+        transform=transforms.ToDtype,  # 你的自定义 transform
         unlabeled_ratio=unlabeled_ratio
     )
-
     train_dataloader = create_contrastive_dataloader(
         dataset=train_dataset,
         aug1=aug1_transform,
@@ -51,9 +52,8 @@ def main():
         root='CUB-200',
         train=False,
         transform=transforms.ToDtype,
-        unlabeled_ratio=0.0  # 测试集保持全标签
+        unlabeled_ratio=0.0
     )
-
     test_loader = torch.utils.data.DataLoader(
         test_dataset,
         batch_size=32,
@@ -94,37 +94,62 @@ def main():
 
     # Teacher 只做推理，不需要 train
     teacher_net.eval()
-    # 进入简单的训练循环
     student_net.train()
+
+    # 使用 'none' 形式的交叉熵以便对每个样本加权
+    criterion = nn.CrossEntropyLoss(reduction='none')
+
     for epoch in range(epochs):
         for batch_idx, contrastive_batch in enumerate(train_dataloader):
 
             original_images = contrastive_batch['original'].to(device)
             aug1_images = contrastive_batch['aug1'].to(device)
             aug2_images = contrastive_batch['aug2'].to(device)
-            labels = contrastive_batch['label'].to(device)  # 其中可能包含 -1 表示无标签
+            labels = contrastive_batch['label'].to(device)  # 可能包含 -1 表示无标签
 
-            # ----------------------------------------------------
-            # 1) 对无标签的样本生成伪标签
-            # ----------------------------------------------------
+            # ----------------------------------------------------------------
+            # (1) 对无标签的样本，用 TeacherNet 在 aug1 & aug2 上做推理 -> 算差异 -> 得置信度 w -> 生成伪标签
+            # ----------------------------------------------------------------
             unlabeled_mask = (labels == -1)
+            w = torch.ones(labels.size(0), device=device)  # 初始时，对整批样本的权重都设为1
+
             if unlabeled_mask.any():
                 with torch.no_grad():
-                    # 用 teacher_net 对无标签的 aug2_images 做推理(也可用 original_images 或 aug1_images)
-                    teacher_logits = teacher_net(aug2_images[unlabeled_mask])
-                    pseudo_labels = teacher_logits.argmax(dim=1)
-                # 将 -1 替换为 teacher 推理得到的类别
+                    # 先拿到无标签样本的 aug1 & aug2
+                    aug1_unlabeled = aug1_images[unlabeled_mask]
+                    aug2_unlabeled = aug2_images[unlabeled_mask]
+
+                    # TeacherNet 两次推理
+                    logits_t1 = teacher_net(aug1_unlabeled)
+                    logits_t2 = teacher_net(aug2_unlabeled)
+                    p1 = F.softmax(logits_t1, dim=1)
+                    p2 = F.softmax(logits_t2, dim=1)
+
+                    # 计算两次预测差异
+                    diff = (p1 - p2).pow(2).sum(dim=1).sqrt()  # shape=[#unlabeled]
+                    # 映射到置信度 w_unlabeled
+                    w_unlabeled = torch.exp(-alpha * diff)  # (0,1]
+
+                    # 生成伪标签 (对p1,p2做平均再argmax)
+                    p_avg = 0.5 * (p1 + p2)
+                    pseudo_labels = p_avg.argmax(dim=1)
+
+                # 将无标签对应位置的标签替换为伪标签
                 labels[unlabeled_mask] = pseudo_labels
+                # 将无标签对应位置的权重替换为 w_unlabeled
+                w[unlabeled_mask] = w_unlabeled
 
-            # ----------------------------------------------------
-            # 2) 计算分类损失 (Student 对 aug1_images)
-            # ----------------------------------------------------
+            # ----------------------------------------------------------------
+            # (2) 计算分类损失: Student 对 aug1_images -> 交叉熵 -> 加权
+            # ----------------------------------------------------------------
             student_logits = student_net(aug1_images)
-            loss_cls = F.cross_entropy(student_logits, labels)
+            ce_all = criterion(student_logits, labels)  # shape=[batch_size]
+            # 逐样本乘以权重 w，再求均值
+            loss_cls = (ce_all * w).mean()
 
-            # ----------------------------------------------------
-            # 3) 计算一致性损失 (在特征层做对齐)
-            # ----------------------------------------------------
+            # ----------------------------------------------------------------
+            # (3) 一致性损失: (在特征层对齐 Teacher vs Student)
+            # ----------------------------------------------------------------
             Fs = get_features(student_net, aug1_images, layer_name)
             Ft = get_features(teacher_net, aug2_images, layer_name)
             Ft_compressed = compression_layer(Ft)
@@ -134,12 +159,12 @@ def main():
 
             loss_cons = consistency_loss(invaug2_Ft, invaug1_Fs)
 
-            # 可以给一致性损失一个权重，比如 0.1、0.01等
+            # 可给一致性损失一个权重，比如 0.1
             loss_total = loss_cls + 0.1 * loss_cons
 
-            # ----------------------------------------------------
-            # 4) 反向传播 & 更新
-            # ----------------------------------------------------
+            # ----------------------------------------------------------------
+            # (4) 反向传播 & 更新
+            # ----------------------------------------------------------------
             optimizer.zero_grad()
             loss_total.backward()
             optimizer.step()
@@ -147,14 +172,25 @@ def main():
             if batch_idx % 10 == 0:
                 print(
                     f"Epoch [{epoch+1}/{epochs}], Batch [{batch_idx}], "
-                    f"Cls Loss: {loss_cls.item():.4f}, Cons Loss: {loss_cons.item():.4f}, "
-                    f"Total Loss: {loss_total.item():.4f}"
+                    f"ClsLoss: {loss_cls.item():.4f}, ConsLoss: {loss_cons.item():.4f}, "
+                    f"w_mean: {w.mean().item():.4f}, TotalLoss: {loss_total.item():.4f}"
                 )
 
     print("Training finished!")
 
-    # 后面如果要做测试 / 验证，可继续对 test_loader 做评估
-    # ...
+    # ====== 训练结束，做可视化 ======
+    # 注意，这里我们把 train_dataset 传给可视化函数，因为它包含了无标签数据
+    # 并指定我们要可视化 teacher_net 的伪标签
+    visualize_pseudo_labels(
+        teacher_net=teacher_net,
+        dataset=train_dataset,
+        device=device,
+        layer_name=layer_name,  # 例如 'layer4'
+        sample_size=500,  # 可以调整采样数量
+        alpha=alpha  # 和训练时一致
+    )
+
+    # 后续再做 test_loader 评估等 ...
 
 if __name__ == "__main__":
     main()
