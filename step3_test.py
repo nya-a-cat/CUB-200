@@ -272,3 +272,6 @@ def test_step3():
                 break
         print("Finished iteration over DataLoader.")
 
+if __name__ == '__main__':
+    test_step3()
+
