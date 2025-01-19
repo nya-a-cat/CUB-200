@@ -39,6 +39,8 @@ def main():
     teacher_net = models.resnet18(pretrained=True)
     for param in teacher_net.parameters():
         param.requires_grad = False  # Freeze TeacherNet parameters
+    student_net.fc = nn.Linear(512, num_classes)
+    teacher_net.fc = nn.Linear(512, num_classes)
 
     # --- 1x1 Convolution for Channel Compression ---
     teacher_feature_dim = teacher_net._modules[layer_name][-1].conv2.out_channels
