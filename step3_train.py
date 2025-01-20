@@ -6,7 +6,6 @@ import torchvision.transforms.v2 as transforms
 import os
 import wandb
 
-
 from semi_supervised_dataset import SemiSupervisedCUB200
 from contrastive_dataset import create_contrastive_dataloader
 from custom_transforms import get_augmentation_transforms, get_inverse_transforms
@@ -58,7 +57,7 @@ def main():
     train_dataset = SemiSupervisedCUB200(
         root='CUB-200',
         train=True,
-        transform=transforms.Compose([transforms.transforms.ToImage(), transforms.transforms.ToDtype(torch.float32, scale=True)]),
+        transform=transforms.ToTensor(),
         unlabeled_ratio=config.unlabeled_ratio
     )
     train_dataloader = create_contrastive_dataloader(
@@ -97,8 +96,8 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Student & Teacher
-    student_net = models.resnet18(weights='IMAGENET1K_V1')
-    teacher_net = models.resnet50(weights='IMAGENET1K_V1')
+    student_net = models.resnet18(pretrained=True)
+    teacher_net = models.resnet50(pretrained=True)
 
     # Modify the final fully connected layer of the teacher network before loading weights
     num_ftrs = teacher_net.fc.in_features
@@ -128,12 +127,12 @@ def main():
     student_net.fc = nn.Linear(student_net.fc.in_features, config.num_classes)
 
     # # 1x1 卷积层
-    # compression_layer = nn.Contransformsd(in_channels=2048, out_channels=512, kernel_size=1)
+    # compression_layer = nn.Conv2d(in_channels=2048, out_channels=512, kernel_size=1)
 
     # 1. 在compression layer前后添加归一化层
     compression_layer = nn.Sequential(
         nn.BatchNorm2d(2048),  # 输入归一化
-        nn.Contransformsd(in_channels=2048, out_channels=512, kernel_size=1),
+        nn.Conv2d(in_channels=2048, out_channels=512, kernel_size=1),
         nn.BatchNorm2d(512)  # 输出归一化
     )
 
