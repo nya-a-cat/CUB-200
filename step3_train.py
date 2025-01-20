@@ -9,6 +9,32 @@ from contrastive_dataset import create_contrastive_dataloader
 from custom_transforms import get_augmentation_transforms, get_inverse_transforms
 from utils import consistency_loss, get_features, visualize_pseudo_labels
 
+def evaluate(model, test_loader, device, criterion):
+    model.eval()  # Set the model to evaluation mode
+    correct = 0
+    total = 0
+    loss_total = 0
+
+    with torch.no_grad():  # No need to compute gradients during evaluation
+        for images, labels in test_loader:
+            images, labels = images.to(device), labels.to(device)
+
+            # Forward pass
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+
+            # Calculate accuracy
+            _, predicted = torch.max(outputs, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+
+            loss_total += loss.item()
+
+    accuracy = 100 * correct / total
+    avg_loss = loss_total / len(test_loader)
+
+    return accuracy, avg_loss
+
 def main():
     torch.multiprocessing.freeze_support()
 
@@ -191,6 +217,8 @@ def main():
     )
 
     # 后续再做 test_loader 评估等 ...
+    accuracy, avg_loss = evaluate(student_net, test_loader, device, criterion)
+    print(f"Test Accuracy: {accuracy:.2f}%, Test Loss: {avg_loss:.4f}")
 
 if __name__ == "__main__":
     main()
