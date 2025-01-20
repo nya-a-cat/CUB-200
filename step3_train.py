@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import torchvision.models as models
 import torchvision.transforms.v2 as transforms
 import os
+import wandb
 
 from semi_supervised_dataset import SemiSupervisedCUB200
 from contrastive_dataset import create_contrastive_dataloader
@@ -40,20 +41,25 @@ def main():
     torch.multiprocessing.freeze_support()
 
     # --- Hyperparameters and Configurations ---
-    batch_size = 200
-    image_size = 224
-    num_classes = 200
-    layer_name = 'layer4'
-    unlabeled_ratio = 0.6  # 60%的无标签数据
+    config = {
+        "batch_size": 200,
+        "image_size": 224,
+        "num_classes": 200,
+        "layer_name": 'layer4',
+        "unlabeled_ratio": 0.6,
+        "epochs": 100,
+        "lr": 1e-3,
+        "patience": 10,
+        "improvement_threshold": 1.0,
+        "alpha": 5.0
+    }
 
-    epochs = 2
-    lr = 1e-3
-
-    # 置信度相关超参数
-    alpha = 5.0  # 控制差异->置信度的衰减
+    # --- Initialize WandB ---
+    wandb.init(project="semi-supervised-learning", config=config)
+    config = wandb.config  # Access config through wandb
 
     # --- Data Loaders ---
-    aug1_transform, aug2_transform = get_augmentation_transforms(size=image_size)
+    aug1_transform, aug2_transform = get_augmentation_transforms(size=config.image_size)
     inverse_aug1_transform, inverse_aug2_transform = get_inverse_transforms()
 
     # 使用半监督版本的 CUB200 数据集：部分数据 label=-1
@@ -61,13 +67,13 @@ def main():
         root='CUB-200',
         train=True,
         transform=transforms.ToDtype,  # 你的自定义 transform
-        unlabeled_ratio=unlabeled_ratio
+        unlabeled_ratio=config.unlabeled_ratio
     )
     train_dataloader = create_contrastive_dataloader(
         dataset=train_dataset,
         aug1=aug1_transform,
         aug2=aug2_transform,
-        batch_size=batch_size,
+        batch_size=config.batch_size,
         shuffle=True,
         num_workers=8,
         pin_memory=True,
@@ -111,12 +117,12 @@ def main():
     teacher_net.to(device).eval()
 
     # 替换最后一层，全连接输出 200 类
-    student_net.fc = nn.Linear(512, num_classes)
-    teacher_net.fc = nn.Linear(512, num_classes)
+    student_net.fc = nn.Linear(512, config.num_classes)
+    teacher_net.fc = nn.Linear(512, config.num_classes)
 
     # 1x1 卷积层，用于将 teacher 的特征通道压缩到 student 的特征通道数（如果需要）
-    teacher_feature_dim = teacher_net._modules[layer_name][-1].conv2.out_channels
-    student_feature_dim = student_net._modules[layer_name][-1].conv2.out_channels
+    teacher_feature_dim = teacher_net._modules[config.layer_name][-1].conv2.out_channels
+    student_feature_dim = student_net._modules[config.layer_name][-1].conv2.out_channels
     compression_layer = nn.Conv2d(teacher_feature_dim, student_feature_dim, kernel_size=1)
 
     student_net.to(device)
@@ -126,7 +132,7 @@ def main():
     # 优化器仅更新 student_net（和 compression_layer，如果需要）参数
     optimizer = torch.optim.Adam(
         list(student_net.parameters()) + list(compression_layer.parameters()),
-        lr=lr
+        lr=config.lr
     )
 
     # Teacher 只做推理，不需要 train
@@ -136,7 +142,16 @@ def main():
     # 使用 'none' 形式的交叉熵以便对每个样本加权
     criterion = nn.CrossEntropyLoss(reduction='none')
 
-    for epoch in range(epochs):
+    best_val_accuracy = 0.0
+    epochs_no_improve = 0
+    best_model_state = None
+    model_save_path = 'studentmodel_best.pth'
+
+    for epoch in range(config.epochs):
+        train_loss_total = 0
+        train_correct = 0
+        train_total = 0
+
         for batch_idx, contrastive_batch in enumerate(train_dataloader):
 
             original_images = contrastive_batch['original'].to(device)
@@ -165,7 +180,7 @@ def main():
                     # 计算两次预测差异
                     diff = (p1 - p2).pow(2).sum(dim=1).sqrt()  # shape=[#unlabeled]
                     # 映射到置信度 w_unlabeled
-                    w_unlabeled = torch.exp(-alpha * diff)  # (0,1]
+                    w_unlabeled = torch.exp(-config.alpha * diff)  # (0,1]
 
                     # 生成伪标签 (对p1,p2做平均再argmax)
                     p_avg = 0.5 * (p1 + p2)
@@ -184,11 +199,16 @@ def main():
             # 逐样本乘以权重 w，再求均值
             loss_cls = (ce_all * w).mean()
 
+            # 计算训练集 accuracy
+            _, predicted = torch.max(student_logits, 1)
+            train_total += labels.size(0)
+            train_correct += (predicted == labels).sum().item()
+
             # ----------------------------------------------------------------
             # (3) 一致性损失: (在特征层对齐 Teacher vs Student)
             # ----------------------------------------------------------------
-            Fs = get_features(student_net, aug1_images, layer_name)
-            Ft = get_features(teacher_net, aug2_images, layer_name)
+            Fs = get_features(student_net, aug1_images, config.layer_name)
+            Ft = get_features(teacher_net, aug2_images, config.layer_name)
             Ft_compressed = compression_layer(Ft)
 
             invaug1_Fs = inverse_aug1_transform(Fs)
@@ -198,6 +218,7 @@ def main():
 
             # 可给一致性损失一个权重，比如 0.1
             loss_total = loss_cls + 0.1 * loss_cons
+            train_loss_total += loss_total.item()
 
             # ----------------------------------------------------------------
             # (4) 反向传播 & 更新
@@ -207,13 +228,54 @@ def main():
             optimizer.step()
 
             if batch_idx % 10 == 0:
+                wandb.log({
+                    "train/batch_cls_loss": loss_cls.item(),
+                    "train/batch_cons_loss": loss_cons.item(),
+                    "train/batch_w_mean": w.mean().item(),
+                    "train/batch_total_loss": loss_total.item()
+                })
                 print(
-                    f"Epoch [{epoch+1}/{epochs}], Batch [{batch_idx}], "
+                    f"Epoch [{epoch+1}/{config.epochs}], Batch [{batch_idx}], "
                     f"ClsLoss: {loss_cls.item():.4f}, ConsLoss: {loss_cons.item():.4f}, "
                     f"w_mean: {w.mean().item():.4f}, TotalLoss: {loss_total.item():.4f}"
                 )
 
+        # 每个 epoch 结束后在测试集上评估
+        accuracy, avg_loss = evaluate(student_net, test_loader, device, criterion)
+        train_accuracy = 100 * train_correct / train_total
+        avg_train_loss = train_loss_total / len(train_dataloader)
+
+        wandb.log({
+            "val/accuracy": accuracy,
+            "val/loss": avg_loss,
+            "train/accuracy": train_accuracy,
+            "train/loss": avg_train_loss
+        })
+        print(f"Epoch [{epoch+1}/{config.epochs}], Train Accuracy: {train_accuracy:.2f}%, Train Loss: {avg_train_loss:.4f}, Test Accuracy: {accuracy:.2f}%, Test Loss: {avg_loss:.4f}")
+
+        # 早停逻辑
+        improvement = accuracy - best_val_accuracy
+        if improvement >= config.improvement_threshold:
+            best_val_accuracy = accuracy
+            epochs_no_improve = 0
+            best_model_state = student_net.state_dict()  # 保存最佳模型的状态
+            torch.save({'model_state_dict': best_model_state}, model_save_path)
+            wandb.log({"best_val_accuracy": best_val_accuracy})
+            print(f"Validation accuracy improved, saving model to {model_save_path}")
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve == config.patience:
+                print(f"Early stopping triggered at epoch {epoch+1}")
+                break
+
     print("Training finished!")
+
+    # 加载最佳模型进行后续操作
+    if os.path.exists(model_save_path):
+        checkpoint = torch.load(model_save_path)
+        student_net.load_state_dict(checkpoint['model_state_dict'])
+        print(f"Loaded best model weights from '{model_save_path}'.")
+        wandb.save(model_save_path) # Save the best model as an artifact
 
     # ====== 训练结束，做可视化 ======
     # 注意，这里我们把 train_dataset 传给可视化函数，因为它包含了无标签数据
@@ -222,14 +284,17 @@ def main():
         teacher_net=teacher_net,
         dataset=train_dataset,
         device=device,
-        layer_name=layer_name,  # 例如 'layer4'
+        layer_name=config.layer_name,  # 例如 'layer4'
         sample_size=500,  # 可以调整采样数量
-        alpha=alpha  # 和训练时一致
+        alpha=config.alpha  # 和训练时一致
     )
 
     # 后续再做 test_loader 评估等 ...
     accuracy, avg_loss = evaluate(student_net, test_loader, device, criterion)
-    print(f"Test Accuracy: {accuracy:.2f}%, Test Loss: {avg_loss:.4f}")
+    print(f"Test Accuracy with best model: {accuracy:.2f}%, Test Loss: {avg_loss:.4f}")
+    wandb.log({"final_test_accuracy": accuracy, "final_test_loss": avg_loss})
+
+    wandb.finish()
 
 if __name__ == "__main__":
     main()
