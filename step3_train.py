@@ -35,7 +35,7 @@ def main():
 
     # --- Hyperparameters and Configurations ---
     config = {
-        "batch_size": 200,
+        "batch_size": 20,
         "image_size": 224,
         "num_classes": 200,
         "layer_name": 'layer4',
@@ -85,7 +85,7 @@ def main():
     )
     test_loader = torch.utils.data.DataLoader(
         test_dataset,
-        batch_size=200,
+        batch_size=config.batch_size,
         shuffle=False,
         num_workers=8,
         pin_memory=True,
@@ -195,10 +195,10 @@ def main():
 
             # --- Debugging Compression Layer ---
             print(f"Epoch [{epoch+1}/{config.epochs}], Batch [{batch_idx}] - Before Compression Layer")
-            print("Compression Layer Weight:", compression_layer.weight)
-            print("Compression Layer Bias:", compression_layer.bias)
-            print("Compression Layer Weight Grad:", compression_layer.weight.grad)
-            print("Compression Layer Bias Grad:", compression_layer.bias.grad)
+            # print("Compression Layer Weight:", compression_layer.weight)
+            # print("Compression Layer Bias:", compression_layer.bias)
+            # print("Compression Layer Weight Grad:", compression_layer.weight.grad)
+            # print("Compression Layer Bias Grad:", compression_layer.bias.grad)
             print("Min of Ft:", torch.min(Ft))
             print("Max of Ft:", torch.max(Ft))
             print("Is NaN in Ft:", torch.isnan(Ft).any())
@@ -213,6 +213,8 @@ def main():
             invaug1_Fs = inverse_aug1_transform(Fs)
             invaug2_Ft = inverse_aug2_transform(Ft_compressed)
             loss_cons = consistency_loss(invaug2_Ft, invaug1_Fs)
+            # 输出训练的第几批次和 loss_cons
+            print(f"Epoch [{epoch + 1}/{config.epochs}], Batch [{batch_idx}], Consistency Loss: {loss_cons.item():.4f}")
 
             loss_total = loss_cls + 0.1 * loss_cons
             train_loss_total += loss_total.item()
