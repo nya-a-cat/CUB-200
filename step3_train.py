@@ -12,29 +12,21 @@ from custom_transforms import get_augmentation_transforms, get_inverse_transform
 from utils import consistency_loss, get_features, visualize_pseudo_labels
 
 def evaluate(model, test_loader, device, criterion):
-    model.eval()  # Set the model to evaluation mode
+    model.eval()
     correct = 0
     total = 0
     loss_total = 0
-
-    with torch.no_grad():  # No need to compute gradients during evaluation
+    with torch.no_grad():
         for images, labels in test_loader:
             images, labels = images.to(device), labels.to(device)
-
-            # Forward pass
             outputs = model(images)
             loss = criterion(outputs, labels)
-
-            # Calculate accuracy
             _, predicted = torch.max(outputs, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
-
             loss_total += loss.item()
-
     accuracy = 100 * correct / total
     avg_loss = loss_total / len(test_loader)
-
     return accuracy, avg_loss
 
 def main():
@@ -56,17 +48,16 @@ def main():
 
     # --- Initialize WandB ---
     wandb.init(project="semi-supervised-learning", config=config)
-    config = wandb.config  # Access config through wandb
+    config = wandb.config
 
     # --- Data Loaders ---
     aug1_transform, aug2_transform = get_augmentation_transforms(size=config.image_size)
     inverse_aug1_transform, inverse_aug2_transform = get_inverse_transforms()
 
-    # 使用半监督版本的 CUB200 数据集：部分数据 label=-1
     train_dataset = SemiSupervisedCUB200(
         root='CUB-200',
         train=True,
-        transform=transforms.ToDtype,  # 你的自定义 transform
+        transform=transforms.ToDtype,
         unlabeled_ratio=config.unlabeled_ratio
     )
     train_dataloader = create_contrastive_dataloader(
@@ -80,7 +71,6 @@ def main():
         prefetch_factor=2
     )
 
-    # 测试集：保持全标签，和原来一样
     test_dataset = SemiSupervisedCUB200(
         root='CUB-200',
         train=False,
@@ -102,7 +92,6 @@ def main():
     # Student & Teacher
     student_net = models.resnet18(pretrained=True)
     teacher_net = models.resnet18(pretrained=True)
-    # 冻结teacher网络参数
     for param in teacher_net.parameters():
         param.requires_grad = False
 
@@ -110,8 +99,15 @@ def main():
     teacher_weights_path = 'model_checkpoints/best_model.pth'
     if os.path.exists(teacher_weights_path):
         checkpoint = torch.load(teacher_weights_path)
-        teacher_net.load_state_dict(checkpoint['model_state_dict'])
-        print(f"Loaded TeacherNet weights from '{teacher_weights_path}'.")
+
+        # --- Load TeacherNet weights with error handling ---
+        try:
+            teacher_net.load_state_dict(checkpoint['model_state_dict'])
+            print(f"Successfully loaded TeacherNet weights from '{teacher_weights_path}'.")
+        except RuntimeError as e:
+            print(f"Error loading TeacherNet weights: {e}")
+            print("Please ensure the checkpoint was saved with a compatible ResNet18 architecture.")
+            return  # Exit if there's an error
     else:
         print("No custom TeacherNet checkpoint found, loading pretrained weights from torchvision.")
     teacher_net.to(device).eval()
@@ -120,7 +116,7 @@ def main():
     student_net.fc = nn.Linear(512, config.num_classes)
     teacher_net.fc = nn.Linear(512, config.num_classes)
 
-    # 1x1 卷积层，用于将 teacher 的特征通道压缩到 student 的特征通道数（如果需要）
+    # 1x1 卷积层
     teacher_feature_dim = teacher_net._modules[config.layer_name][-1].conv2.out_channels
     student_feature_dim = student_net._modules[config.layer_name][-1].conv2.out_channels
     compression_layer = nn.Conv2d(teacher_feature_dim, student_feature_dim, kernel_size=1)
@@ -129,17 +125,15 @@ def main():
     teacher_net.to(device)
     compression_layer.to(device)
 
-    # 优化器仅更新 student_net（和 compression_layer，如果需要）参数
+    # 优化器
     optimizer = torch.optim.Adam(
         list(student_net.parameters()) + list(compression_layer.parameters()),
         lr=config.lr
     )
 
-    # Teacher 只做推理，不需要 train
     teacher_net.eval()
     student_net.train()
 
-    # 使用 'none' 形式的交叉熵以便对每个样本加权
     criterion = nn.CrossEntropyLoss(reduction='none')
 
     best_val_accuracy = 0.0
@@ -153,76 +147,48 @@ def main():
         train_total = 0
 
         for batch_idx, contrastive_batch in enumerate(train_dataloader):
-
             original_images = contrastive_batch['original'].to(device)
             aug1_images = contrastive_batch['aug1'].to(device)
             aug2_images = contrastive_batch['aug2'].to(device)
-            labels = contrastive_batch['label'].to(device)  # 可能包含 -1 表示无标签
+            labels = contrastive_batch['label'].to(device)
 
-            # ----------------------------------------------------------------
-            # (1) 对无标签的样本，用 TeacherNet 在 aug1 & aug2 上做推理 -> 算差异 -> 得置信度 w -> 生成伪标签
-            # ----------------------------------------------------------------
             unlabeled_mask = (labels == -1)
-            w = torch.ones(labels.size(0), device=device)  # 初始时，对整批样本的权重都设为1
+            w = torch.ones(labels.size(0), device=device)
 
             if unlabeled_mask.any():
                 with torch.no_grad():
-                    # 先拿到无标签样本的 aug1 & aug2
                     aug1_unlabeled = aug1_images[unlabeled_mask]
                     aug2_unlabeled = aug2_images[unlabeled_mask]
-
-                    # TeacherNet 两次推理
                     logits_t1 = teacher_net(aug1_unlabeled)
                     logits_t2 = teacher_net(aug2_unlabeled)
                     p1 = F.softmax(logits_t1, dim=1)
                     p2 = F.softmax(logits_t2, dim=1)
-
-                    # 计算两次预测差异
-                    diff = (p1 - p2).pow(2).sum(dim=1).sqrt()  # shape=[#unlabeled]
-                    # 映射到置信度 w_unlabeled
-                    w_unlabeled = torch.exp(-config.alpha * diff)  # (0,1]
-
-                    # 生成伪标签 (对p1,p2做平均再argmax)
+                    diff = (p1 - p2).pow(2).sum(dim=1).sqrt()
+                    w_unlabeled = torch.exp(-config.alpha * diff)
                     p_avg = 0.5 * (p1 + p2)
                     pseudo_labels = p_avg.argmax(dim=1)
 
-                # 将无标签对应位置的标签替换为伪标签
                 labels[unlabeled_mask] = pseudo_labels
-                # 将无标签对应位置的权重替换为 w_unlabeled
                 w[unlabeled_mask] = w_unlabeled
 
-            # ----------------------------------------------------------------
-            # (2) 计算分类损失: Student 对 aug1_images -> 交叉熵 -> 加权
-            # ----------------------------------------------------------------
             student_logits = student_net(aug1_images)
-            ce_all = criterion(student_logits, labels)  # shape=[batch_size]
-            # 逐样本乘以权重 w，再求均值
+            ce_all = criterion(student_logits, labels)
             loss_cls = (ce_all * w).mean()
 
-            # 计算训练集 accuracy
             _, predicted = torch.max(student_logits, 1)
             train_total += labels.size(0)
             train_correct += (predicted == labels).sum().item()
 
-            # ----------------------------------------------------------------
-            # (3) 一致性损失: (在特征层对齐 Teacher vs Student)
-            # ----------------------------------------------------------------
             Fs = get_features(student_net, aug1_images, config.layer_name)
             Ft = get_features(teacher_net, aug2_images, config.layer_name)
             Ft_compressed = compression_layer(Ft)
-
             invaug1_Fs = inverse_aug1_transform(Fs)
             invaug2_Ft = inverse_aug2_transform(Ft_compressed)
-
             loss_cons = consistency_loss(invaug2_Ft, invaug1_Fs)
 
-            # 可给一致性损失一个权重，比如 0.1
             loss_total = loss_cls + 0.1 * loss_cons
             train_loss_total += loss_total.item()
 
-            # ----------------------------------------------------------------
-            # (4) 反向传播 & 更新
-            # ----------------------------------------------------------------
             optimizer.zero_grad()
             loss_total.backward()
             optimizer.step()
@@ -240,7 +206,6 @@ def main():
                     f"w_mean: {w.mean().item():.4f}, TotalLoss: {loss_total.item():.4f}"
                 )
 
-        # 每个 epoch 结束后在测试集上评估
         accuracy, avg_loss = evaluate(student_net, test_loader, device, criterion)
         train_accuracy = 100 * train_correct / train_total
         avg_train_loss = train_loss_total / len(train_dataloader)
@@ -253,12 +218,11 @@ def main():
         })
         print(f"Epoch [{epoch+1}/{config.epochs}], Train Accuracy: {train_accuracy:.2f}%, Train Loss: {avg_train_loss:.4f}, Test Accuracy: {accuracy:.2f}%, Test Loss: {avg_loss:.4f}")
 
-        # 早停逻辑
         improvement = accuracy - best_val_accuracy
         if improvement >= config.improvement_threshold:
             best_val_accuracy = accuracy
             epochs_no_improve = 0
-            best_model_state = student_net.state_dict()  # 保存最佳模型的状态
+            best_model_state = student_net.state_dict()
             torch.save({'model_state_dict': best_model_state}, model_save_path)
             wandb.log({"best_val_accuracy": best_val_accuracy})
             print(f"Validation accuracy improved, saving model to {model_save_path}")
@@ -270,26 +234,24 @@ def main():
 
     print("Training finished!")
 
-    # 加载最佳模型进行后续操作
+    # Load the best student model
     if os.path.exists(model_save_path):
         checkpoint = torch.load(model_save_path)
         student_net.load_state_dict(checkpoint['model_state_dict'])
-        print(f"Loaded best model weights from '{model_save_path}'.")
-        wandb.save(model_save_path) # Save the best model as an artifact
+        print(f"Loaded best student model weights from '{model_save_path}'.")
+        wandb.save(model_save_path)
 
-    # ====== 训练结束，做可视化 ======
-    # 注意，这里我们把 train_dataset 传给可视化函数，因为它包含了无标签数据
-    # 并指定我们要可视化 teacher_net 的伪标签
+    # Visualize pseudo-labels
     visualize_pseudo_labels(
         teacher_net=teacher_net,
         dataset=train_dataset,
         device=device,
-        layer_name=config.layer_name,  # 例如 'layer4'
-        sample_size=500,  # 可以调整采样数量
-        alpha=config.alpha  # 和训练时一致
+        layer_name=config.layer_name,
+        sample_size=500,
+        alpha=config.alpha
     )
 
-    # 后续再做 test_loader 评估等 ...
+    # Evaluate the best student model
     accuracy, avg_loss = evaluate(student_net, test_loader, device, criterion)
     print(f"Test Accuracy with best model: {accuracy:.2f}%, Test Loss: {avg_loss:.4f}")
     wandb.log({"final_test_accuracy": accuracy, "final_test_loss": avg_loss})
