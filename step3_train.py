@@ -74,7 +74,12 @@ def main():
     test_dataset = SemiSupervisedCUB200(
         root='CUB-200',
         train=False,
-        transform=transforms.ToTensor(),
+        transform=transforms.Compose([
+    transforms.RandomResizedCrop(config.image_size, scale=(0.8, 1.0), ratio=(0.75, 1.333)),  # 随机裁剪并缩放到目标尺寸
+    transforms.RandomRotation(degrees=15),  # 随机旋转，角度范围 +/- 15 度
+    transforms.ToTensor(),
+    # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),  # 标准化
+]),
         unlabeled_ratio=0.0
     )
     test_loader = torch.utils.data.DataLoader(
