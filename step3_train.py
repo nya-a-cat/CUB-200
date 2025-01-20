@@ -126,8 +126,18 @@ def main():
     # 替换最后一层，全连接输出 200 类
     student_net.fc = nn.Linear(student_net.fc.in_features, config.num_classes)
 
-    # 1x1 卷积层
-    compression_layer = nn.Conv2d(in_channels=2048, out_channels=512, kernel_size=1)
+    # # 1x1 卷积层
+    # compression_layer = nn.Conv2d(in_channels=2048, out_channels=512, kernel_size=1)
+
+    # 1. 在compression layer前后添加归一化层
+    compression_layer = nn.Sequential(
+        nn.BatchNorm2d(2048),  # 输入归一化
+        nn.Conv2d(in_channels=2048, out_channels=512, kernel_size=1),
+        nn.BatchNorm2d(512)  # 输出归一化
+    )
+
+    # 2. 添加梯度裁剪
+    # torch.nn.utils.clip_grad_norm_(compression_layer.parameters(), max_norm=1.0)
 
     student_net.to(device)
     teacher_net.to(device)
