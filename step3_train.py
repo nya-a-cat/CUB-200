@@ -92,6 +92,11 @@ def main():
     # Student & Teacher
     student_net = models.resnet18(pretrained=True)
     teacher_net = models.resnet50(pretrained=True)
+
+    # Modify the final fully connected layer of the teacher network before loading weights
+    num_ftrs = teacher_net.fc.in_features
+    teacher_net.fc = nn.Linear(num_ftrs, config.num_classes)
+
     for param in teacher_net.parameters():
         param.requires_grad = False
 
@@ -106,15 +111,14 @@ def main():
             print(f"Successfully loaded TeacherNet weights from '{teacher_weights_path}'.")
         except RuntimeError as e:
             print(f"Error loading TeacherNet weights: {e}")
-            print("Please ensure the checkpoint was saved with a compatible ResNet18 architecture.")
+            print("Please ensure the checkpoint was saved with a compatible ResNet50 architecture and the correct number of output classes.")
             return  # Exit if there's an error
     else:
-        print("No custom TeacherNet checkpoint found, loading pretrained weights from torchvision.")
+        print("No custom TeacherNet checkpoint found, using initialized pretrained weights from torchvision.")
     teacher_net.to(device).eval()
 
     # 替换最后一层，全连接输出 200 类
-    student_net.fc = nn.Linear(512, config.num_classes)
-    teacher_net.fc = nn.Linear(512, config.num_classes)
+    student_net.fc = nn.Linear(student_net.fc.in_features, config.num_classes)
 
     # 1x1 卷积层
     teacher_feature_dim = teacher_net._modules[config.layer_name][-1].conv2.out_channels
