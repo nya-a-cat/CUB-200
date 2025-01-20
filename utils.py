@@ -81,8 +81,36 @@ def visualize_consistency(original_image, aug1_image, aug2_image,
     plt.tight_layout()
     plt.show()
 
+# def consistency_loss(invaug2_Ft, invaug1_Fs):
+#     return F.mse_loss(invaug2_Ft, invaug1_Fs)
+
 def consistency_loss(invaug2_Ft, invaug1_Fs):
-    return F.mse_loss(invaug2_Ft, invaug1_Fs)
+    """
+    计算一致性损失（均方误差），并打印计算过程。
+
+    Args:
+        invaug2_Ft: 第一个张量。
+        invaug1_Fs: 第二个张量。
+
+    Returns:
+        均方误差损失值。
+    """
+    print("输入张量 invaug2_Ft:\n", invaug2_Ft)
+    print("输入张量 invaug1_Fs:\n", invaug1_Fs)
+
+    # 计算差值
+    diff = invaug2_Ft - invaug1_Fs
+    print("\n计算差值 (invaug2_Ft - invaug1_Fs):\n", diff)
+
+    # 计算差值的平方
+    squared_diff = diff ** 2
+    print("\n计算差值的平方:\n", squared_diff)
+
+    # 计算均值 (得到 MSE 损失)
+    mse_loss_value = torch.mean(squared_diff)
+    print("\n计算均值 (MSE Loss):\n", mse_loss_value)
+
+    return mse_loss_value
 
 def get_features(model, images, layer_name):
     """
