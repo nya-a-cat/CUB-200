@@ -35,7 +35,7 @@ def main():
 
     # --- Hyperparameters and Configurations ---
     config = {
-        "batch_size": 20,
+        "batch_size": 150,
         "image_size": 224,
         "num_classes": 200,
         "layer_name": 'layer4',
