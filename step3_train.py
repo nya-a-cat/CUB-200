@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
 import torchvision.transforms.v2 as transforms
+import os
 
 from semi_supervised_dataset import SemiSupervisedCUB200
 from contrastive_dataset import create_contrastive_dataloader
@@ -98,6 +99,16 @@ def main():
     # 冻结teacher网络参数
     for param in teacher_net.parameters():
         param.requires_grad = False
+
+    # --- Initialize TeacherNet ---
+    teacher_weights_path = 'model_checkpoints/best_model.pth'
+    if os.path.exists(teacher_weights_path):
+        checkpoint = torch.load(teacher_weights_path)
+        teacher_net.load_state_dict(checkpoint['model_state_dict'])
+        print(f"Loaded TeacherNet weights from '{teacher_weights_path}'.")
+    else:
+        print("No custom TeacherNet checkpoint found, loading pretrained weights from torchvision.")
+    teacher_net.to(device).eval()
 
     # 替换最后一层，全连接输出 200 类
     student_net.fc = nn.Linear(512, num_classes)
