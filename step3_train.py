@@ -21,10 +21,11 @@ def evaluate(model, test_loader, device, criterion):
             images, labels = images.to(device), labels.to(device)
             outputs = model(images)
             loss = criterion(outputs, labels)
+            # 将批次损失的平均值加到 loss_total
+            loss_total += loss.mean().item()
             _, predicted = torch.max(outputs, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
-            loss_total += loss.item()
     accuracy = 100 * correct / total
     avg_loss = loss_total / len(test_loader)
     return accuracy, avg_loss
