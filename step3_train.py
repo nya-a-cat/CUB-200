@@ -74,7 +74,7 @@ def main():
     test_dataset = SemiSupervisedCUB200(
         root='CUB-200',
         train=False,
-        transform=transforms.ToDtype,
+        transform=transforms.ToTensor(),
         unlabeled_ratio=0.0
     )
     test_loader = torch.utils.data.DataLoader(
