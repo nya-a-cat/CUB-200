@@ -121,9 +121,7 @@ def main():
     student_net.fc = nn.Linear(student_net.fc.in_features, config.num_classes)
 
     # 1x1 卷积层
-    teacher_feature_dim = teacher_net._modules[config.layer_name][-1].conv2.out_channels
-    student_feature_dim = student_net._modules[config.layer_name][-1].conv2.out_channels
-    compression_layer = nn.Conv2d(teacher_feature_dim, student_feature_dim, kernel_size=1)
+    compression_layer = nn.Conv2d(in_channels=2048, out_channels=512, kernel_size=1)
 
     student_net.to(device)
     teacher_net.to(device)
