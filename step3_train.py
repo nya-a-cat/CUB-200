@@ -149,6 +149,9 @@ def main():
     best_model_state = None
     model_save_path = 'studentmodel_best.pth'
 
+    # Flag to temporarily disable compression layer for debugging
+    disable_compression_layer = False
+
     for epoch in range(config.epochs):
         train_loss_total = 0
         train_correct = 0
@@ -189,7 +192,24 @@ def main():
 
             Fs = get_features(student_net, aug1_images, config.layer_name)
             Ft = get_features(teacher_net, aug2_images, config.layer_name)
-            Ft_compressed = compression_layer(Ft)
+
+            # --- Debugging Compression Layer ---
+            print(f"Epoch [{epoch+1}/{config.epochs}], Batch [{batch_idx}] - Before Compression Layer")
+            print("Compression Layer Weight:", compression_layer.weight)
+            print("Compression Layer Bias:", compression_layer.bias)
+            print("Compression Layer Weight Grad:", compression_layer.weight.grad)
+            print("Compression Layer Bias Grad:", compression_layer.bias.grad)
+            print("Min of Ft:", torch.min(Ft))
+            print("Max of Ft:", torch.max(Ft))
+            print("Is NaN in Ft:", torch.isnan(Ft).any())
+
+            if not disable_compression_layer:
+                Ft_compressed = compression_layer(Ft)
+                print("Is NaN in Ft_compressed:", torch.isnan(Ft_compressed).any())
+            else:
+                Ft_compressed = Ft
+                print("Compression layer disabled for debugging.")
+
             invaug1_Fs = inverse_aug1_transform(Fs)
             invaug2_Ft = inverse_aug2_transform(Ft_compressed)
             loss_cons = consistency_loss(invaug2_Ft, invaug1_Fs)
@@ -200,6 +220,10 @@ def main():
             optimizer.zero_grad()
             loss_total.backward()
             optimizer.step()
+
+            # --- Gradient Clipping (Optional) ---
+            # torch.nn.utils.clip_grad_norm_(student_net.parameters(), max_norm=1)
+            # torch.nn.utils.clip_grad_norm_(compression_layer.parameters(), max_norm=1)
 
             if batch_idx % 10 == 0:
                 wandb.log({
