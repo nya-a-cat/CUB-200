@@ -21,7 +21,6 @@ def evaluate(model, test_loader, device, criterion):
             images, labels = images.to(device), labels.to(device)
             outputs = model(images)
             loss = criterion(outputs, labels)
-            # 将批次损失的平均值加到 loss_total
             loss_total += loss.mean().item()
             _, predicted = torch.max(outputs, 1)
             total += labels.size(0)
@@ -227,6 +226,13 @@ def main():
             print(f"Epoch [{epoch + 1}/{config.epochs}], Batch [{batch_idx}], Consistency Loss: {loss_cons.item():.4f}")
 
             loss_total = loss_cls + 0.1 * loss_cons
+
+            # --- 添加 NaN 检测 ---
+            if torch.isnan(loss_total):
+                print("Error: NaN detected in loss. Stopping training.")
+                break  # 停止当前 batch 的训练
+            # --- NaN 检测结束 ---
+
             train_loss_total += loss_total.item()
 
             optimizer.zero_grad()
@@ -249,6 +255,10 @@ def main():
                     f"ClsLoss: {loss_cls.item():.4f}, ConsLoss: {loss_cons.item():.4f}, "
                     f"w_mean: {w.mean().item():.4f}, TotalLoss: {loss_total.item():.4f}"
                 )
+
+        # 在 epoch 结束时检查是否因为 NaN 而停止
+        if torch.isnan(loss_total):
+            break  # 停止整个 epoch 的训练
 
         accuracy, avg_loss = evaluate(student_net, test_loader, device, criterion)
         train_accuracy = 100 * train_correct / train_total
