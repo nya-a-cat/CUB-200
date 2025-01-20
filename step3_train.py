@@ -57,7 +57,7 @@ def main():
     train_dataset = SemiSupervisedCUB200(
         root='CUB-200',
         train=True,
-        transform=transforms.ToDtype,
+        transform=transforms.ToTensor(),
         unlabeled_ratio=config.unlabeled_ratio
     )
     train_dataloader = create_contrastive_dataloader(
