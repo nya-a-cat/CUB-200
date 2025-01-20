@@ -57,7 +57,7 @@ def main():
     train_dataset = SemiSupervisedCUB200(
         root='CUB-200',
         train=True,
-        transform=transforms.v2.Compose([transforms.v2.ToImage(), transforms.v2.ToDtype(torch.float32, scale=True)]),
+        transform=transforms.transforms.Compose([transforms.transforms.ToImage(), transforms.transforms.ToDtype(torch.float32, scale=True)]),
         unlabeled_ratio=config.unlabeled_ratio
     )
     train_dataloader = create_contrastive_dataloader(
@@ -77,8 +77,8 @@ def main():
         transform=transforms.Compose([
             transforms.RandomResizedCrop(config.image_size, scale=(0.8, 1.0), ratio=(0.75, 1.333)),  # 随机裁剪并缩放到目标尺寸
             transforms.RandomRotation(degrees=15),  # 随机旋转，角度范围 +/- 15 度
-            transforms.v2.ToImage(),
-            transforms.v2.ToDtype(torch.float32, scale=True),
+            transforms.transforms.ToImage(),
+            transforms.transforms.ToDtype(torch.float32, scale=True),
             # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),  # 标准化
         ]),
         unlabeled_ratio=0.0
@@ -127,12 +127,12 @@ def main():
     student_net.fc = nn.Linear(student_net.fc.in_features, config.num_classes)
 
     # # 1x1 卷积层
-    # compression_layer = nn.Conv2d(in_channels=2048, out_channels=512, kernel_size=1)
+    # compression_layer = nn.Contransformsd(in_channels=2048, out_channels=512, kernel_size=1)
 
     # 1. 在compression layer前后添加归一化层
     compression_layer = nn.Sequential(
         nn.BatchNorm2d(2048),  # 输入归一化
-        nn.Conv2d(in_channels=2048, out_channels=512, kernel_size=1),
+        nn.Contransformsd(in_channels=2048, out_channels=512, kernel_size=1),
         nn.BatchNorm2d(512)  # 输出归一化
     )
 
