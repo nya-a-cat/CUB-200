@@ -57,7 +57,7 @@ def main():
     train_dataset = SemiSupervisedCUB200(
         root='CUB-200',
         train=True,
-        transform=transforms.ToTensor(),
+        transform=transforms.v2.Compose([transforms.v2.ToImage(), transforms.v2.ToDtype(torch.float32, scale=True)]),
         unlabeled_ratio=config.unlabeled_ratio
     )
     train_dataloader = create_contrastive_dataloader(
@@ -75,11 +75,12 @@ def main():
         root='CUB-200',
         train=False,
         transform=transforms.Compose([
-    transforms.RandomResizedCrop(config.image_size, scale=(0.8, 1.0), ratio=(0.75, 1.333)),  # 随机裁剪并缩放到目标尺寸
-    transforms.RandomRotation(degrees=15),  # 随机旋转，角度范围 +/- 15 度
-    transforms.ToTensor(),
-    # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),  # 标准化
-]),
+            transforms.RandomResizedCrop(config.image_size, scale=(0.8, 1.0), ratio=(0.75, 1.333)),  # 随机裁剪并缩放到目标尺寸
+            transforms.RandomRotation(degrees=15),  # 随机旋转，角度范围 +/- 15 度
+            transforms.v2.ToImage(),
+            transforms.v2.ToDtype(torch.float32, scale=True),
+            # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),  # 标准化
+        ]),
         unlabeled_ratio=0.0
     )
     test_loader = torch.utils.data.DataLoader(
@@ -95,8 +96,8 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Student & Teacher
-    student_net = models.resnet18(pretrained=True)
-    teacher_net = models.resnet50(pretrained=True)
+    student_net = models.resnet18(weights='IMAGENET1K_V1')
+    teacher_net = models.resnet50(weights='IMAGENET1K_V1')
 
     # Modify the final fully connected layer of the teacher network before loading weights
     num_ftrs = teacher_net.fc.in_features
