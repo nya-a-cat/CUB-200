@@ -36,7 +36,7 @@ def main():
 
     # --- Model Initialization ---
     student_net = models.resnet18(pretrained=True)
-    teacher_net = models.resnet18(pretrained=True)
+    teacher_net = models.resnet50(pretrained=True)
     for param in teacher_net.parameters():
         param.requires_grad = False  # Freeze TeacherNet parameters
     student_net.fc = nn.Linear(512, num_classes)

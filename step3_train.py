@@ -11,7 +11,6 @@ from contrastive_dataset import create_contrastive_dataloader
 from custom_transforms import get_augmentation_transforms, get_inverse_transforms
 from utils import get_features, visualize_pseudo_labels
 
-
 def init_weights(m):
     """Initialize network weights using Kaiming initialization"""
     if isinstance(m, nn.Conv2d):
@@ -19,14 +18,12 @@ def init_weights(m):
         if m.bias is not None:
             nn.init.constant_(m.bias, 0)
 
-
 def log_gradients(model, step):
     """Log gradient norms to wandb"""
     for name, param in model.named_parameters():
         if param.grad is not None:
             grad_norm = param.grad.norm().item()
             wandb.log({f"gradients/{name}_norm": grad_norm}, step=step)
-
 
 def log_feature_stats(tensor, name, step):
     """Log feature statistics to wandb"""
@@ -37,7 +34,6 @@ def log_feature_stats(tensor, name, step):
         f"features/{name}_min": tensor.min().item()
     }, step=step)
 
-
 def safe_consistency_loss(pred, target, epsilon=1e-8):
     """Compute consistency loss with safety checks"""
     if torch.isnan(pred).any() or torch.isnan(target).any():
@@ -47,7 +43,6 @@ def safe_consistency_loss(pred, target, epsilon=1e-8):
     # Use smooth L1 loss instead of MSE for better numerical stability
     return F.smooth_l1_loss(pred / (pred.norm(dim=1, keepdim=True) + epsilon),
                             target / (target.norm(dim=1, keepdim=True) + epsilon))
-
 
 def evaluate(model, test_loader, device, criterion):
     """Evaluate model performance"""
@@ -67,7 +62,6 @@ def evaluate(model, test_loader, device, criterion):
     accuracy = 100 * correct / total
     avg_loss = loss_total / len(test_loader)
     return accuracy, avg_loss
-
 
 def main():
     torch.multiprocessing.freeze_support()
@@ -138,6 +132,17 @@ def main():
     # Student & Teacher
     student_net = models.resnet18(pretrained=True)
     teacher_net = models.resnet50(pretrained=True)
+
+    # Define the NaN detection hook
+    def nan_detector_hook(module, input, output):
+        if torch.isnan(output).any():
+            print(f"NaN detected in the output of {module}")
+            # Optionally, you can raise an error to stop training immediately
+            # raise RuntimeError("NaN detected!")
+
+    # Register the hook to student and teacher layer4
+    student_net.layer4.register_forward_hook(nan_detector_hook)
+    teacher_net.layer4.register_forward_hook(nan_detector_hook)
 
     # Modify final layers
     num_ftrs = teacher_net.fc.in_features
@@ -347,7 +352,6 @@ def main():
 
     # Cleanup
     wandb.finish()
-
 
 if __name__ == "__main__":
     main()
