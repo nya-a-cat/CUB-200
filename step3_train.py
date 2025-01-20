@@ -9,43 +9,9 @@ import wandb
 from semi_supervised_dataset import SemiSupervisedCUB200
 from contrastive_dataset import create_contrastive_dataloader
 from custom_transforms import get_augmentation_transforms, get_inverse_transforms
-from utils import get_features, visualize_pseudo_labels
-
-def init_weights(m):
-    """Initialize network weights using Kaiming initialization"""
-    if isinstance(m, nn.Conv2d):
-        nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-        if m.bias is not None:
-            nn.init.constant_(m.bias, 0)
-
-def log_gradients(model, step):
-    """Log gradient norms to wandb"""
-    for name, param in model.named_parameters():
-        if param.grad is not None:
-            grad_norm = param.grad.norm().item()
-            wandb.log({f"gradients/{name}_norm": grad_norm}, step=step)
-
-def log_feature_stats(tensor, name, step):
-    """Log feature statistics to wandb"""
-    wandb.log({
-        f"features/{name}_mean": tensor.mean().item(),
-        f"features/{name}_std": tensor.std().item(),
-        f"features/{name}_max": tensor.max().item(),
-        f"features/{name}_min": tensor.min().item()
-    }, step=step)
-
-def safe_consistency_loss(pred, target, epsilon=1e-8):
-    """Compute consistency loss with safety checks"""
-    if torch.isnan(pred).any() or torch.isnan(target).any():
-        print("Warning: NaN detected in consistency loss inputs")
-        return torch.tensor(0.0, requires_grad=True, device=pred.device)
-
-    # Use smooth L1 loss instead of MSE for better numerical stability
-    return F.smooth_l1_loss(pred / (pred.norm(dim=1, keepdim=True) + epsilon),
-                            target / (target.norm(dim=1, keepdim=True) + epsilon))
+from utils import consistency_loss, get_features, visualize_pseudo_labels
 
 def evaluate(model, test_loader, device, criterion):
-    """Evaluate model performance"""
     model.eval()
     correct = 0
     total = 0
@@ -55,6 +21,7 @@ def evaluate(model, test_loader, device, criterion):
             images, labels = images.to(device), labels.to(device)
             outputs = model(images)
             loss = criterion(outputs, labels)
+            # 将批次损失的平均值加到 loss_total
             loss_total += loss.mean().item()
             _, predicted = torch.max(outputs, 1)
             total += labels.size(0)
@@ -74,12 +41,10 @@ def main():
         "layer_name": 'layer4',
         "unlabeled_ratio": 0.6,
         "epochs": 100,
-        "lr": 5e-4,  # Reduced learning rate for stability
+        "lr": 1e-3,
         "patience": 10,
         "improvement_threshold": 1.0,
-        "alpha": 5.0,
-        "warmup_epochs": 5,  # Added warmup epochs
-        "gradient_clip_norm": 1.0,  # Added gradient clipping
+        "alpha": 5.0
     }
 
     # --- Initialize WandB ---
@@ -111,10 +76,11 @@ def main():
         root='CUB-200',
         train=False,
         transform=transforms.Compose([
-            transforms.RandomResizedCrop(config.image_size, scale=(0.8, 1.0), ratio=(0.75, 1.333)),
-            transforms.RandomRotation(degrees=15),
-            transforms.ToTensor(),
-        ]),
+    transforms.RandomResizedCrop(config.image_size, scale=(0.8, 1.0), ratio=(0.75, 1.333)),  # 随机裁剪并缩放到目标尺寸
+    transforms.RandomRotation(degrees=15),  # 随机旋转，角度范围 +/- 15 度
+    transforms.ToTensor(),
+    # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),  # 标准化
+]),
         unlabeled_ratio=0.0
     )
     test_loader = torch.utils.data.DataLoader(
@@ -126,73 +92,62 @@ def main():
         prefetch_factor=2
     )
 
-    # --- Model Initialization ---
+    # --- 模型初始化 ---
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Student & Teacher
     student_net = models.resnet18(pretrained=True)
     teacher_net = models.resnet50(pretrained=True)
 
-    # Define the NaN detection hook
-    def nan_detector_hook(module, input, output):
-        if torch.isnan(output).any():
-            print(f"NaN detected in the output of {module}")
-            # Optionally, you can raise an error to stop training immediately
-            # raise RuntimeError("NaN detected!")
-
-    # Register the hook to student and teacher layer4
-    student_net.layer4.register_forward_hook(nan_detector_hook)
-    teacher_net.layer4.register_forward_hook(nan_detector_hook)
-
-    # Modify final layers
+    # Modify the final fully connected layer of the teacher network before loading weights
     num_ftrs = teacher_net.fc.in_features
     teacher_net.fc = nn.Linear(num_ftrs, config.num_classes)
-    student_net.fc = nn.Linear(student_net.fc.in_features, config.num_classes)
 
-    # Freeze teacher parameters
     for param in teacher_net.parameters():
         param.requires_grad = False
 
-    # Initialize teacher network
+    # --- Initialize TeacherNet ---
     teacher_weights_path = 'model_checkpoints/best_model.pth'
     if os.path.exists(teacher_weights_path):
         checkpoint = torch.load(teacher_weights_path)
+
+        # --- Load TeacherNet weights with error handling ---
         try:
             teacher_net.load_state_dict(checkpoint['model_state_dict'])
             print(f"Successfully loaded TeacherNet weights from '{teacher_weights_path}'.")
         except RuntimeError as e:
             print(f"Error loading TeacherNet weights: {e}")
-            return
+            print("Please ensure the checkpoint was saved with a compatible ResNet50 architecture and the correct number of output classes.")
+            return  # Exit if there's an error
     else:
-        print("No custom TeacherNet checkpoint found, using initialized pretrained weights.")
+        print("No custom TeacherNet checkpoint found, using initialized pretrained weights from torchvision.")
+    teacher_net.to(device).eval()
 
-    # Optimized compression layer with normalization and activation
+    # 替换最后一层，全连接输出 200 类
+    student_net.fc = nn.Linear(student_net.fc.in_features, config.num_classes)
+
+    # # 1x1 卷积层
+    # compression_layer = nn.Conv2d(in_channels=2048, out_channels=512, kernel_size=1)
+
+    # 1. 在compression layer前后添加归一化层
     compression_layer = nn.Sequential(
-        nn.BatchNorm2d(2048),
+        nn.BatchNorm2d(2048),  # 输入归一化
         nn.Conv2d(in_channels=2048, out_channels=512, kernel_size=1),
-        nn.ReLU(),
-        nn.BatchNorm2d(512)
+        nn.BatchNorm2d(512)  # 输出归一化
     )
-    compression_layer.apply(init_weights)
 
-    # Move models to device
+    # 2. 添加梯度裁剪
+    # torch.nn.utils.clip_grad_norm_(compression_layer.parameters(), max_norm=1.0)
+
     student_net.to(device)
     teacher_net.to(device)
     compression_layer.to(device)
 
-    # Optimizer with warmup
+    # 优化器
     optimizer = torch.optim.Adam(
         list(student_net.parameters()) + list(compression_layer.parameters()),
         lr=config.lr
     )
-
-    # Learning rate scheduler with warmup
-    def warmup_lambda(epoch):
-        if epoch < config.warmup_epochs:
-            return epoch / config.warmup_epochs
-        return 1.0
-
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, warmup_lambda)
 
     teacher_net.eval()
     student_net.train()
@@ -203,7 +158,9 @@ def main():
     epochs_no_improve = 0
     best_model_state = None
     model_save_path = 'studentmodel_best.pth'
-    global_step = 0
+
+    # Flag to temporarily disable compression layer for debugging
+    disable_compression_layer = False
 
     for epoch in range(config.epochs):
         train_loss_total = 0
@@ -216,7 +173,6 @@ def main():
             aug2_images = contrastive_batch['aug2'].to(device)
             labels = contrastive_batch['label'].to(device)
 
-            # Handle unlabeled data
             unlabeled_mask = (labels == -1)
             w = torch.ones(labels.size(0), device=device)
 
@@ -236,121 +192,114 @@ def main():
                 labels[unlabeled_mask] = pseudo_labels
                 w[unlabeled_mask] = w_unlabeled
 
-            # Forward pass through student network
             student_logits = student_net(aug1_images)
             ce_all = criterion(student_logits, labels)
             loss_cls = (ce_all * w).mean()
 
-            # Track accuracy
             _, predicted = torch.max(student_logits, 1)
             train_total += labels.size(0)
             train_correct += (predicted == labels).sum().item()
 
-            # Get features and apply consistency loss
             Fs = get_features(student_net, aug1_images, config.layer_name)
             Ft = get_features(teacher_net, aug2_images, config.layer_name)
 
-            # Log feature statistics
-            log_feature_stats(Fs, "student_features", global_step)
-            log_feature_stats(Ft, "teacher_features", global_step)
+            # --- Debugging Compression Layer ---
+            print(f"Epoch [{epoch+1}/{config.epochs}], Batch [{batch_idx}] - Before Compression Layer")
+            # print("Compression Layer Weight:", compression_layer.weight)
+            # print("Compression Layer Bias:", compression_layer.bias)
+            # print("Compression Layer Weight Grad:", compression_layer.weight.grad)
+            # print("Compression Layer Bias Grad:", compression_layer.bias.grad)
+            print("Min of Ft:", torch.min(Ft))
+            print("Max of Ft:", torch.max(Ft))
+            print("Is NaN in Ft:", torch.isnan(Ft).any())
 
-            # Apply compression and compute consistency loss
-            Ft_compressed = compression_layer(Ft)
+            if not disable_compression_layer:
+                Ft_compressed = compression_layer(Ft)
+                print("Is NaN in Ft_compressed:", torch.isnan(Ft_compressed).any())
+            else:
+                Ft_compressed = Ft
+                print("Compression layer disabled for debugging.")
+
             invaug1_Fs = inverse_aug1_transform(Fs)
             invaug2_Ft = inverse_aug2_transform(Ft_compressed)
-            loss_cons = safe_consistency_loss(invaug2_Ft, invaug1_Fs)
+            loss_cons = consistency_loss(invaug2_Ft, invaug1_Fs)
+            # 输出训练的第几批次和 loss_cons
+            print(f"Epoch [{epoch + 1}/{config.epochs}], Batch [{batch_idx}], Consistency Loss: {loss_cons.item():.4f}")
 
-            # Total loss and backward pass
             loss_total = loss_cls + 0.1 * loss_cons
             train_loss_total += loss_total.item()
 
             optimizer.zero_grad()
             loss_total.backward()
-
-            # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(student_net.parameters(), config.gradient_clip_norm)
-            torch.nn.utils.clip_grad_norm_(compression_layer.parameters(), config.gradient_clip_norm)
-
             optimizer.step()
 
-            # Log gradients
-            log_gradients(student_net, global_step)
-            log_gradients(compression_layer, global_step)
+            # --- Gradient Clipping (Optional) ---
+            # torch.nn.utils.clip_grad_norm_(student_net.parameters(), max_norm=1)
+            # torch.nn.utils.clip_grad_norm_(compression_layer.parameters(), max_norm=1)
 
-            # Logging
             if batch_idx % 10 == 0:
                 wandb.log({
                     "train/batch_cls_loss": loss_cls.item(),
                     "train/batch_cons_loss": loss_cons.item(),
                     "train/batch_w_mean": w.mean().item(),
-                    "train/batch_total_loss": loss_total.item(),
-                    "train/learning_rate": optimizer.param_groups[0]['lr']
-                }, step=global_step)
+                    "train/batch_total_loss": loss_total.item()
+                })
                 print(
-                    f"Epoch [{epoch + 1}/{config.epochs}], Batch [{batch_idx}], "
+                    f"Epoch [{epoch+1}/{config.epochs}], Batch [{batch_idx}], "
                     f"ClsLoss: {loss_cls.item():.4f}, ConsLoss: {loss_cons.item():.4f}, "
                     f"w_mean: {w.mean().item():.4f}, TotalLoss: {loss_total.item():.4f}"
                 )
 
-            global_step += 1
-
-        # Evaluate and update learning rate
         accuracy, avg_loss = evaluate(student_net, test_loader, device, criterion)
         train_accuracy = 100 * train_correct / train_total
         avg_train_loss = train_loss_total / len(train_dataloader)
 
-        scheduler.step()
-
-        # Logging
         wandb.log({
             "val/accuracy": accuracy,
             "val/loss": avg_loss,
             "train/accuracy": train_accuracy,
-            "train/loss": avg_train_loss,
-            "train/epoch": epoch
-        }, step=global_step)
+            "train/loss": avg_train_loss
+        })
+        print(f"Epoch [{epoch+1}/{config.epochs}], Train Accuracy: {train_accuracy:.2f}%, Train Loss: {avg_train_loss:.4f}, Test Accuracy: {accuracy:.2f}%, Test Loss: {avg_loss:.4f}")
 
-        print(f"Epoch [{epoch + 1}/{config.epochs}], "
-              f"Train Accuracy: {train_accuracy:.2f}%, "
-              f"Train Loss: {avg_train_loss:.4f}, "
-              f"Test Accuracy: {accuracy:.2f}%, "
-              f"Test Loss: {avg_loss:.4f}")
-
-        # Model checkpointing
         improvement = accuracy - best_val_accuracy
         if improvement >= config.improvement_threshold:
             best_val_accuracy = accuracy
             epochs_no_improve = 0
             best_model_state = student_net.state_dict()
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': best_model_state,
-                'optimizer_state_dict': optimizer.state_dict(),
-                'accuracy': accuracy
-            }, model_save_path)
-            wandb.log({"best_val_accuracy": best_val_accuracy}, step=global_step)
+            torch.save({'model_state_dict': best_model_state}, model_save_path)
+            wandb.log({"best_val_accuracy": best_val_accuracy})
             print(f"Validation accuracy improved, saving model to {model_save_path}")
         else:
             epochs_no_improve += 1
             if epochs_no_improve == config.patience:
-                print(f"Early stopping triggered at epoch {epoch + 1}")
+                print(f"Early stopping triggered at epoch {epoch+1}")
                 break
 
     print("Training finished!")
 
-    # Load best model and evaluate
+    # Load the best student model
     if os.path.exists(model_save_path):
         checkpoint = torch.load(model_save_path)
         student_net.load_state_dict(checkpoint['model_state_dict'])
         print(f"Loaded best student model weights from '{model_save_path}'.")
         wandb.save(model_save_path)
 
-    # Final evaluation
+    # Visualize pseudo-labels
+    visualize_pseudo_labels(
+        teacher_net=teacher_net,
+        dataset=train_dataset,
+        device=device,
+        layer_name=config.layer_name,
+        sample_size=500,
+        alpha=config.alpha
+    )
+
+    # Evaluate the best student model
     accuracy, avg_loss = evaluate(student_net, test_loader, device, criterion)
-    print(f"Final Test Accuracy: {accuracy:.2f}%, Test Loss: {avg_loss:.4f}")
+    print(f"Test Accuracy with best model: {accuracy:.2f}%, Test Loss: {avg_loss:.4f}")
     wandb.log({"final_test_accuracy": accuracy, "final_test_loss": avg_loss})
 
-    # Cleanup
     wandb.finish()
 
 if __name__ == "__main__":
