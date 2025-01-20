@@ -6,9 +6,10 @@ import random
 
 def get_augmentation_transforms(size=224):
     common_transforms = [
+        T.ToTensor(),
         T.ToDtype(torch.float32, scale=True),
         T.Resize((256,256)),
-        T.ToTensor(),
+        # T.ToTensor(),
         T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ]
     aug1 = T.Compose([
