@@ -9,17 +9,17 @@ def get_augmentation_transforms(size=224):
         T.ToTensor(),
         T.ToDtype(torch.float32, scale=True),
         T.Resize((256,256)),
-        # T.ToTensor(),
-        T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        # T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ]
     aug1 = T.Compose([
         *common_transforms,
-        T.ColorJitter(0.4, 0.4, 0.4, 0.1)
+        # T.ColorJitter(0.4, 0.4, 0.4, 0.1)
+        T.RandomHorizontalFlip(p=1.0)
     ])
     aug2 = T.Compose([
         *common_transforms,
-        T.ColorJitter(brightness=0.6, contrast=0.6, saturation=0.6, hue=0.2),
-        T.RandomRotation(degrees=30)
+        # T.ColorJitter(brightness=0.6, contrast=0.6, saturation=0.6, hue=0.2),
+        T.RandomRotation(degrees=(30, 30))
     ])
     return aug1, aug2
 
@@ -29,7 +29,7 @@ def get_inverse_transforms():
     ])
     inv_aug2 = T.Compose([
         T.RandomRotation(degrees=(-30, -30)),  # 近似逆向
-        T.RandomHorizontalFlip(p=0.5),
+        T.RandomHorizontalFlip(p=1),
         T.RandomAffine(degrees=0, translate=(0.1, 0.1), shear=(-10, 10, -10, 10))
     ])
     return inv_aug1, inv_aug2
