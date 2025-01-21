@@ -9,6 +9,7 @@ import torchvision.models as models
 import torchvision.transforms.v2 as transforms
 import os
 import wandb
+from torchvision.utils import save_image
 
 from semi_supervised_dataset import SemiSupervisedCUB200
 from contrastive_dataset import create_contrastive_dataloader
@@ -38,7 +39,7 @@ def main():
 
     # --- Hyperparameters and Configurations ---
     config = {
-        "batch_size": 1,
+        "batch_size": 150,  # 恢复到正常的 batch size
         "image_size": 224,
         "num_classes": 200,
         "layer_name": 'layer4',
@@ -176,89 +177,106 @@ def main():
             aug2_images = contrastive_batch['aug2'].to(device).float() # 确保数据是 float32
             labels = contrastive_batch['label'].to(device)
 
-            unlabeled_mask = (labels == -1)
-            w = torch.ones(labels.size(0), device=device)
+            # 保存出错时的输入图片
+            try:
+                unlabeled_mask = (labels == -1)
+                w = torch.ones(labels.size(0), device=device)
 
-            if unlabeled_mask.any():
-                with torch.no_grad():
-                    aug1_unlabeled = aug1_images[unlabeled_mask]
-                    aug2_unlabeled = aug2_images[unlabeled_mask]
-                    logits_t1 = teacher_net(aug1_unlabeled)
-                    logits_t2 = teacher_net(aug2_unlabeled)
-                    p1 = F.softmax(logits_t1, dim=1)
-                    p2 = F.softmax(logits_t2, dim=1)
-                    diff = (p1 - p2).pow(2).sum(dim=1).sqrt()
-                    w_unlabeled = torch.exp(-config.alpha * diff)
-                    p_avg = 0.5 * (p1 + p2)
-                    pseudo_labels = p_avg.argmax(dim=1)
+                if unlabeled_mask.any():
+                    with torch.no_grad():
+                        aug1_unlabeled = aug1_images[unlabeled_mask]
+                        aug2_unlabeled = aug2_images[unlabeled_mask]
+                        logits_t1 = teacher_net(aug1_unlabeled)
+                        logits_t2 = teacher_net(aug2_unlabeled)
+                        p1 = F.softmax(logits_t1, dim=1)
+                        p2 = F.softmax(logits_t2, dim=1)
+                        diff = (p1 - p2).pow(2).sum(dim=1).sqrt()
+                        w_unlabeled = torch.exp(-config.alpha * diff)
+                        p_avg = 0.5 * (p1 + p2)
+                        pseudo_labels = p_avg.argmax(dim=1)
 
-                labels[unlabeled_mask] = pseudo_labels
-                w[unlabeled_mask] = w_unlabeled
+                    labels[unlabeled_mask] = pseudo_labels
+                    w[unlabeled_mask] = w_unlabeled
 
-            student_logits = student_net(aug1_images)
-            ce_all = criterion(student_logits, labels)
-            loss_cls = (ce_all * w).mean()
+                student_logits = student_net(aug1_images)
+                ce_all = criterion(student_logits, labels)
+                loss_cls = (ce_all * w).mean()
 
-            _, predicted = torch.max(student_logits, 1)
-            train_total += labels.size(0)
-            train_correct += (predicted == labels).sum().item()
+                _, predicted = torch.max(student_logits, 1)
+                train_total += labels.size(0)
+                train_correct += (predicted == labels).sum().item()
 
-            Fs = get_features(student_net, aug1_images, config.layer_name)
-            Ft = get_features(teacher_net, aug2_images, config.layer_name)
+                Fs = get_features(student_net, aug1_images, config.layer_name)
+                Ft = get_features(teacher_net, aug2_images, config.layer_name)
 
-            # --- Debugging Compression Layer ---
-            print(f"Epoch [{epoch+1}/{config.epochs}], Batch [{batch_idx}] - Before Compression Layer")
-            # print("Compression Layer Weight:", compression_layer.weight)
-            # print("Compression Layer Bias:", compression_layer.bias)
-            # print("Compression Layer Weight Grad:", compression_layer.weight.grad)
-            # print("Compression Layer Bias Grad:", compression_layer.bias.grad)
-            print("Min of Ft:", torch.min(Ft))
-            print("Max of Ft:", torch.max(Ft))
-            print("Is NaN in Ft:", torch.isnan(Ft).any())
+                print("Shape of Ft before compression layer:", Ft.shape)
+                print("Shape of Fs:", Fs.shape)
 
-            if not disable_compression_layer:
-                Ft_compressed = compression_layer(Ft.float()) # 确保输入是 float32
-                print("Is NaN in Ft_compressed:", torch.isnan(Ft_compressed).any())
-            else:
-                Ft_compressed = Ft
-                print("Compression layer disabled for debugging.")
+                # 保存特征图
+                save_feature_map(Ft, "Ft_before_compression", batch_idx)
+                save_feature_map(Fs, "Fs", batch_idx)
 
-            invaug1_Fs = inverse_aug1_transform(Fs)
-            invaug2_Ft = inverse_aug2_transform(Ft_compressed)
-            loss_cons = consistency_loss(invaug2_Ft, invaug1_Fs)
-            # 输出训练的第几批次和 loss_cons
-            print(f"Epoch [{epoch + 1}/{config.epochs}], Batch [{batch_idx}], Consistency Loss: {loss_cons.item():.4f}")
+                if not disable_compression_layer:
+                    Ft_compressed = compression_layer(Ft.float()) # 确保输入是 float32
+                else:
+                    Ft_compressed = Ft
+                    print("Compression layer disabled for debugging.")
 
-            loss_total = loss_cls + 0.1 * loss_cons
+                print("Shape of Ft after compression layer:", Ft_compressed.shape)
+                save_feature_map(Ft_compressed, "Ft_after_compression", batch_idx)
 
-            # --- 添加 NaN 检测 ---
-            if torch.isnan(loss_total):
-                print("Error: NaN detected in loss. Stopping training.")
-                break  # 停止当前 batch 的训练
-            # --- NaN 检测结束 ---
+                invaug1_Fs = inverse_aug1_transform(Fs)
+                invaug2_Ft = inverse_aug2_transform(Ft_compressed)
+                loss_cons = consistency_loss(invaug2_Ft, invaug1_Fs)
 
-            train_loss_total += loss_total.item()
+                # 输出 Ft, 压缩后的 Ft 和 consistency loss
+                print(f"Epoch [{epoch + 1}/{config.epochs}], Batch [{batch_idx}]")
+                print("Ft (after get_features):", Ft)
+                print("Ft_compressed (after compression_layer):", Ft_compressed)
+                print(f"Consistency Loss: {loss_cons.item():.4f}")
 
-            optimizer.zero_grad()
-            loss_total.backward()
-            optimizer.step()
+                loss_total = loss_cls + 0.1 * loss_cons
 
-            # --- Gradient Clipping (Optional) ---
-            # torch.nn.utils.clip_grad_norm_(student_net.parameters(), max_norm=1)
-            # torch.nn.utils.clip_grad_norm_(compression_layer.parameters(), max_norm=1)
+                # --- 添加 NaN 检测 ---
+                if torch.isnan(loss_total):
+                    print("Error: NaN detected in loss. Stopping training.")
+                    # 保存导致 NaN 损失的输入图像
+                    save_image(original_images, f"error_batch_{batch_idx}_original.png")
+                    save_image(aug1_images, f"error_batch_{batch_idx}_aug1.png")
+                    save_image(aug2_images, f"error_batch_{batch_idx}_aug2.png")
+                    break  # 停止当前 batch 的训练
+                # --- NaN 检测结束 ---
 
-            if batch_idx % 10 == 0:
-                wandb.log({
-                    "train/batch_cls_loss": loss_cls.item(),
-                    "train/batch_cons_loss": loss_cons.item(),
-                    "train/batch_w_mean": w.mean().item(),
-                    "train/batch_total_loss": loss_total.item()
-                })
-                print(
-                    f"Epoch [{epoch+1}/{config.epochs}], Batch [{batch_idx}], "
-                    f"ClsLoss: {loss_cls.item():.4f}, ConsLoss: {loss_cons.item():.4f}, "
-                    f"w_mean: {w.mean().item():.4f}, TotalLoss: {loss_total.item():.4f}"
-                )
+                train_loss_total += loss_total.item()
+
+                optimizer.zero_grad()
+                loss_total.backward()
+                optimizer.step()
+
+                # --- Gradient Clipping (Optional) ---
+                # torch.nn.utils.clip_grad_norm_(student_net.parameters(), max_norm=1)
+                # torch.nn.utils.clip_grad_norm_(compression_layer.parameters(), max_norm=1)
+
+                if batch_idx % 10 == 0:
+                    wandb.log({
+                        "train/batch_cls_loss": loss_cls.item(),
+                        "train/batch_cons_loss": loss_cons.item(),
+                        "train/batch_w_mean": w.mean().item(),
+                        "train/batch_total_loss": loss_total.item()
+                    })
+                    print(
+                        f"Epoch [{epoch+1}/{config.epochs}], Batch [{batch_idx}], "
+                        f"ClsLoss: {loss_cls.item():.4f}, ConsLoss: {loss_cons.item():.4f}, "
+                        f"w_mean: {w.mean().item():.4f}, TotalLoss: {loss_total.item():.4f}"
+                    )
+
+            except Exception as e:
+                print(f"Error during training at epoch {epoch}, batch {batch_idx}: {e}")
+                # 保存导致错误的输入图像
+                save_image(original_images, f"error_batch_{batch_idx}_original.png")
+                save_image(aug1_images, f"error_batch_{batch_idx}_aug1.png")
+                save_image(aug2_images, f"error_batch_{batch_idx}_aug2.png")
+                raise  # 重新抛出异常以便调试
 
         # 在 epoch 结束时检查是否因为 NaN 而停止
         if torch.isnan(loss_total):
@@ -315,6 +333,23 @@ def main():
     wandb.log({"final_test_accuracy": accuracy, "final_test_loss": avg_loss})
 
     wandb.finish()
+
+def save_feature_map(feature_map, name, batch_idx):
+    # 假设 feature_map 的形状是 [B, C, H, W]
+    # 我们想要保存 batch 中第一个样本的特征图
+
+    if not os.path.exists("feature_maps"):
+        os.makedirs("feature_maps")
+
+    sample_feature_map = feature_map[0].cpu().detach()
+
+    # 将特征图缩放到 0-1 范围并保存前 8 个通道
+    for i in range(min(8, sample_feature_map.shape[0])):
+        channel_map = sample_feature_map[i]
+        min_val = channel_map.min()
+        max_val = channel_map.max()
+        normalized_map = (channel_map - min_val) / (max_val - min_val + 1e-5)
+        save_image(normalized_map, f"feature_maps/batch_{batch_idx}_{name}_channel_{i}.png")
 
 if __name__ == "__main__":
     main()
