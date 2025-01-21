@@ -1,4 +1,8 @@
 import torch
+
+# 确保 torch 使用 float32
+torch.set_default_dtype(torch.float32)
+
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
@@ -18,7 +22,7 @@ def evaluate(model, test_loader, device, criterion):
     loss_total = 0
     with torch.no_grad():
         for images, labels in test_loader:
-            images, labels = images.to(device), labels.to(device)
+            images, labels = images.to(device).float(), labels.to(device)  # 确保数据是 float32
             outputs = model(images)
             loss = criterion(outputs, labels)
             loss_total += loss.mean().item()
@@ -95,12 +99,12 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Student & Teacher
-    student_net = models.resnet18(pretrained=True)
-    teacher_net = models.resnet50(pretrained=True)
+    student_net = models.resnet18(pretrained=True).float()  # 确保模型是 float32
+    teacher_net = models.resnet50(pretrained=True).float()  # 确保模型是 float32
 
     # Modify the final fully connected layer of the teacher network before loading weights
     num_ftrs = teacher_net.fc.in_features
-    teacher_net.fc = nn.Linear(num_ftrs, config.num_classes)
+    teacher_net.fc = nn.Linear(num_ftrs, config.num_classes).float() # 确保是 float32
 
     for param in teacher_net.parameters():
         param.requires_grad = False
@@ -123,7 +127,7 @@ def main():
     teacher_net.to(device).eval()
 
     # 替换最后一层，全连接输出 200 类
-    student_net.fc = nn.Linear(student_net.fc.in_features, config.num_classes)
+    student_net.fc = nn.Linear(student_net.fc.in_features, config.num_classes).float() # 确保是 float32
 
     # # 1x1 卷积层
     # compression_layer = nn.Conv2d(in_channels=2048, out_channels=512, kernel_size=1)
@@ -133,7 +137,7 @@ def main():
         nn.BatchNorm2d(2048),  # 输入归一化
         nn.Conv2d(in_channels=2048, out_channels=512, kernel_size=1),
         nn.BatchNorm2d(512)  # 输出归一化
-    )
+    ).float() # 确保是 float32
 
     # 2. 添加梯度裁剪
     # torch.nn.utils.clip_grad_norm_(compression_layer.parameters(), max_norm=1.0)
@@ -167,9 +171,9 @@ def main():
         train_total = 0
 
         for batch_idx, contrastive_batch in enumerate(train_dataloader):
-            original_images = contrastive_batch['original'].to(device)
-            aug1_images = contrastive_batch['aug1'].to(device)
-            aug2_images = contrastive_batch['aug2'].to(device)
+            original_images = contrastive_batch['original'].to(device).float() # 确保数据是 float32
+            aug1_images = contrastive_batch['aug1'].to(device).float() # 确保数据是 float32
+            aug2_images = contrastive_batch['aug2'].to(device).float() # 确保数据是 float32
             labels = contrastive_batch['label'].to(device)
 
             unlabeled_mask = (labels == -1)
@@ -213,7 +217,7 @@ def main():
             print("Is NaN in Ft:", torch.isnan(Ft).any())
 
             if not disable_compression_layer:
-                Ft_compressed = compression_layer(Ft)
+                Ft_compressed = compression_layer(Ft.float()) # 确保输入是 float32
                 print("Is NaN in Ft_compressed:", torch.isnan(Ft_compressed).any())
             else:
                 Ft_compressed = Ft
