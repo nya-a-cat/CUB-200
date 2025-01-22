@@ -36,7 +36,7 @@ def get_inverse_transforms():
 
 
 # 如果你想真正地“记录随机参数并逆向”的话，可以再写一个自定义类：
-class RandomAffinePair:
+class Random:
     """
     在 forward 时随机采样参数并应用到图像/特征；
     在 inverse 时使用已知参数的反向值再应用到图像/特征。

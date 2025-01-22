@@ -39,7 +39,7 @@ def main():
 
     # --- Hyperparameters and Configurations ---
     config = {
-        "batch_size": 1,  # 恢复到正常的 batch size
+        "batch_size": 100,  # 恢复到正常的 batch size
         "image_size": 224,
         "num_classes": 200,
         "layer_name": 'layer4',
