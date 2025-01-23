@@ -299,9 +299,10 @@ def train_model(config):
             "train/loss": avg_train_loss
         }
         wandb_log_wrapper(epoch_log)
-        print(f"Epoch [{epoch + 1}/{config['epochs']}], Train Accuracy: {epoch_train_accuracy:.2f}%"
-              f" if {epoch_train_accuracy is not None else 'N/A'}, Train Loss: {avg_train_loss:.4f}, "
-              f"Test Accuracy: {accuracy:.2f}%, Test Loss: {avg_loss:.4f}")
+        train_accuracy_str = f"{epoch_train_accuracy:.2f}%" if epoch_train_accuracy is not None else 'N/A' # 格式化 train_accuracy
+
+        print(f"Epoch [{epoch + 1}/{config['epochs']}], Train Accuracy: {train_accuracy_str}, Train Loss: {avg_train_loss:.4f}, Test Accuracy: {accuracy:.2f}%, Test Loss: {avg_loss:.4f}")
+
 
         improvement = accuracy - best_val_accuracy
         if improvement >= config["improvement_threshold"]:
