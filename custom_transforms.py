@@ -28,11 +28,9 @@ def get_augmentation_transforms(size=224):
 
 def get_inverse_transforms():
     inv_aug1 = T.Compose([
-        *common_transforms,
         T.RandomHorizontalFlip(p=1.0)  # 近似逆向
     ])
     inv_aug2 = T.Compose([
-        *common_transforms,
         T.RandomRotation(degrees=(-30, -30)),  # 近似逆向
         T.RandomHorizontalFlip(p=1),
         T.RandomAffine(degrees=0, translate=(0.1, 0.1), shear=(-10, 10, -10, 10))
