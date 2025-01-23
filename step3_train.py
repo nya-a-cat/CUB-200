@@ -6,6 +6,7 @@ import torchvision.transforms.v2 as transforms
 import os
 import wandb
 from torchvision.utils import save_image
+import tqdm # 导入 tqdm
 
 from semi_supervised_dataset import SemiSupervisedCUB200
 from contrastive_dataset import create_contrastive_dataloader
@@ -58,9 +59,7 @@ def create_data_loaders(config):
         root='CUB-200',
         train=False,
         transform=transforms.Compose([
-            transforms.RandomResizedCrop(config["image_size"], scale=(0.8, 1.0), ratio=(0.75, 1.333)),
-            transforms.RandomRotation(degrees=15),
-            transforms.ToImage(),
+            transforms.ToTensor(),
         ]),
         unlabeled_ratio=0.0
     )
@@ -125,7 +124,9 @@ def train_step(student_net, teacher_net, compression_layer, optimizer, train_dat
     train_correct = 0
     train_total = 0
 
-    for batch_idx, contrastive_batch in enumerate(train_dataloader):
+    progress_bar = tqdm.tqdm(enumerate(train_dataloader), total=len(train_dataloader), desc=f"Epoch [{epoch+1}/{config['epochs']}]") # 添加 tqdm
+
+    for batch_idx, contrastive_batch in progress_bar: # 使用 tqdm 包装 dataloader
         original_images = contrastive_batch['original'].to(device).float()
         aug1_images = contrastive_batch['aug1'].to(device).float()
         aug2_images = contrastive_batch['aug2'].to(device).float()
@@ -199,6 +200,13 @@ def train_step(student_net, teacher_net, compression_layer, optimizer, train_dat
                     f"ClsLoss: {loss_cls.item():.4f}, ConsLoss: {loss_cons.item():.4f}, "
                     f"w_mean: {w.mean().item():.4f}, TotalLoss: {loss_total.item():.4f}"
                 )
+                progress_bar.set_postfix({ # 添加 tqdm 后缀显示 loss
+                    'ClsLoss': f'{loss_cls.item():.4f}',
+                    'ConsLoss': f'{loss_cons.item():.4f}',
+                    'TotalLoss': f'{loss_total.item():.4f}',
+                    'Accuracy': f'{100 * train_correct / train_total:.2f}%' if train_total > 0 else 'N/A'
+                })
+
 
         except Exception as e:
             print(f"Error during training at epoch {epoch}, batch {batch_idx}: {e}")
@@ -291,7 +299,9 @@ def train_model(config):
             "train/loss": avg_train_loss
         }
         wandb_log_wrapper(epoch_log)
-        print(f"Epoch [{epoch+1}/{config['epochs']}], Train Accuracy: {epoch_train_accuracy:.2f if epoch_train_accuracy is not None else train_accuracy:.2f}%, Train Loss: {avg_train_loss:.4f}, Test Accuracy: {accuracy:.2f}%, Test Loss: {avg_loss:.4f}")
+        print(f"Epoch [{epoch + 1}/{config['epochs']}], Train Accuracy: {epoch_train_accuracy:.2f}%"
+              f" if {epoch_train_accuracy is not None else 'N/A'}, Train Loss: {avg_train_loss:.4f}, "
+              f"Test Accuracy: {accuracy:.2f}%, Test Loss: {avg_loss:.4f}")
 
         improvement = accuracy - best_val_accuracy
         if improvement >= config["improvement_threshold"]:
