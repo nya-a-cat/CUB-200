@@ -18,14 +18,14 @@ from utils import consistency_loss, get_features, visualize_pseudo_labels
 # --- Configuration ---
 def get_default_config(lr=1e-3, unlabeled_ratio=0.6):
     config = {
-        "batch_size": 200,
+        "batch_size": 100,
         "image_size": 224,
         "num_classes": 200,
         "layer_name": 'layer4',
         "unlabeled_ratio": unlabeled_ratio,
         "epochs": 100,
         "lr": lr,
-        "patience": 100,
+        "patience": 10,
         "improvement_threshold": 1.0,
         "alpha": 5.0,
         "project_name": "semi-supervised-learning",
@@ -230,7 +230,7 @@ def train_step(student_net, teacher_net, compression_layer, optimizer, train_dat
     return avg_train_loss, train_accuracy_epoch, student_net, optimizer, False, train_accuracy_epoch
 
 
-# --- Evaluation Function (remains mostly the same) ---
+# --- Evaluation Function (remains the same) ---
 def evaluate(model, test_loader, device, criterion):
     model.eval()
     correct = 0
@@ -371,23 +371,24 @@ def main():
     torch.set_default_dtype(torch.float32)
 
     parser = argparse.ArgumentParser(description="Run experiments with different lr and unlabeled_ratio")
-    parser.add_argument('--lr', type=float, default=None, help='Learning rate') # set default=None
-    parser.add_argument('--unlabeled_ratio', type=float, default=None, help='Unlabeled ratio') # set default=None
+    parser = argparse.ArgumentParser(description="Run experiments with different lr and unlabeled_ratio")
+    parser.add_argument('--run_type', type=str, default='grid_search', choices=['grid_search', 'single_experiment'], help='Type of run: grid_search or single_experiment') # 添加 run_type 参数
+    parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate (for single experiment)')
+    parser.add_argument('--unlabeled_ratio', type=float, default=0.6, help='Unlabeled ratio (for single experiment)')
     args = parser.parse_args()
+
 
     learning_rates = [0.001, 0.01, 0.1]
     unlabeled_ratios = [0.4, 0.6, 0.8]
 
-    if args.lr is not None and args.unlabeled_ratio is not None:
-        # Run single experiment if lr and unlabeled_ratio are provided as arguments
+    if args.run_type == 'single_experiment': # Check run_type argument
         config = get_default_config(lr=args.lr, unlabeled_ratio=args.unlabeled_ratio)
         wandb.init(project=config["project_name"], config=config,
                    name=f"lr_{config['lr']}_ur_{config['unlabeled_ratio']}")
         wandb.config.update({"cons_loss_factor": config["cons_loss_factor"]})
         train_model(config)
         wandb.finish()
-    else:
-        # Run grid search if lr and unlabeled_ratio are not provided as arguments
+    elif args.run_type == 'grid_search': # Run grid search
         for lr in learning_rates:
             for unlabeled_ratio in unlabeled_ratios:
                 config = get_default_config(lr=lr, unlabeled_ratio=unlabeled_ratio)
@@ -400,6 +401,7 @@ def main():
                 wandb.finish()
                 print("-" * 50)
         print("All experiments finished!")
+
 
 
 if __name__ == "__main__":
