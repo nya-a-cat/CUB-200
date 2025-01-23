@@ -9,6 +9,7 @@ from torchvision.utils import save_image
 import tqdm
 import argparse
 
+from writing_custom_datasets import CUB_200
 from semi_supervised_dataset import SemiSupervisedCUB200
 from contrastive_dataset import create_contrastive_dataloader
 from custom_transforms import get_augmentation_transforms, get_inverse_transforms
@@ -59,15 +60,26 @@ def create_data_loaders(config):
         prefetch_factor=2
     )
 
-    test_dataset = SemiSupervisedCUB200(
-        root='CUB-200',
-        train=False,
+    # test_dataset = SemiSupervisedCUB200(
+    #     root='CUB-200',
+    #     train=False,
+    #     transform=transforms.Compose([
+    #         transforms.Resize((256, 256)),
+    #         transforms.ToTensor(),
+    #     ]),
+    #     unlabeled_ratio=0.0
+    # )
+
+    test_dataset = CUB_200(
+        root='CUB-200',  # 数据集存放的根目录
+        download=True,  # 如果数据集不存在则下载
         transform=transforms.Compose([
-            transforms.Resize((256, 256)),
-            transforms.ToTensor(),
-        ]),
-        unlabeled_ratio=0.0
+                     transforms.Resize((256, 256)),
+                     transforms.ToTensor(),
+                 ]),  # 应用测试集的预处理
+        train=False  # 指定加载测试集
     )
+
     test_loader = torch.utils.data.DataLoader(
         test_dataset,
         batch_size=config["batch_size"],
