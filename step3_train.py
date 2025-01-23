@@ -21,7 +21,7 @@ def get_default_config():
         "image_size": 224,
         "num_classes": 200,
         "layer_name": 'layer4',
-        "unlabeled_ratio": 0.6,
+        "unlabeled_ratio": 0.4,
         "epochs": 100,
         "lr": 1e-3,
         "patience": 100,
