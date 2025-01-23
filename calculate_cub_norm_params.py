@@ -14,7 +14,7 @@ def calculate_mean_std(dataset):
         mean: 各个通道的均值 (tuple of floats)。
         std: 各个通道的标准差 (tuple of floats)。
     """
-    dataloader = DataLoader(dataset, batch_size=32, shuffle=False, num_workers=4)
+    dataloader = DataLoader(dataset, batch_size=32, shuffle=False, num_workers=4) # Keep num_workers=4 to test parallel loading
     mean = torch.zeros(3)
     std = torch.zeros(3)
     total_samples = 0
@@ -28,10 +28,10 @@ def calculate_mean_std(dataset):
         for d in range(3):
             mean[d] += torch.sum(torch.mean(data[:, d, :, :], dim=[1, 2]))
             std[d] += torch.sum(torch.std(data[:, d, :, :], dim=[1, 2]))
-        total_samples += data.size(0) * len(dataloader)
+        total_samples += data.size(0) * data.size(2) * data.size(3) # Correct total_samples calculation
 
-    mean /= total_samples
-    std /= total_samples
+    mean /= total_samples / (data.size(2) * data.size(3)) # Divide by (H*W) to get mean per pixel
+    std /= total_samples / (data.size(2) * data.size(3))  # Divide by (H*W) to get std per pixel
 
     return mean.tolist(), std.tolist()
 
@@ -48,7 +48,10 @@ if __name__ == '__main__':
     train_dataset_stats = CUB_200(
         root='CUB-200', # 替换为你的 CUB 数据集根目录
         train=True,
-        transform=transforms.ToTensor(), #  ToTensor() 是必须的，为了计算均值和标准差
+        transform=transforms.Compose([ # Use Compose to chain transforms
+            transforms.Resize((256, 256)), # Resize images to 256x256
+            transforms.ToTensor(),
+        ]),
         download=True # 如果数据集不存在，可以下载
     )
 
