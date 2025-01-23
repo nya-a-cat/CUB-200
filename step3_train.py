@@ -126,8 +126,7 @@ def create_optimizer(student_net, compression_layer, config):
 
 # --- Training Step ---
 def train_step(student_net, teacher_net, compression_layer, optimizer, train_dataloader, criterion, config, device,
-               inverse_aug1_transform, inverse_aug2_transform, epoch, wandb_log, disable_compression_layer=False,
-               batch_step=0):  # batch_step 作为参数传入
+               inverse_aug1_transform, inverse_aug2_transform, epoch, wandb_log, disable_compression_layer=False): # batch_step 参数移除
     student_net.train()  # Ensure student is in train mode
     train_loss_total = 0
     train_correct = 0
@@ -204,8 +203,7 @@ def train_step(student_net, teacher_net, compression_layer, optimizer, train_dat
                     "train/batch_w_mean": w.mean().item(),
                     "train/batch_total_loss": loss_total.item()
                 }
-                wandb_log(batch_log, step=batch_step)  # 传入 batch_step
-                batch_step += 1  # 递增 batch_step
+                wandb_log(batch_log)  # wandb_log 默认使用自动递增 step
                 print(
                     f"Epoch [{epoch + 1}/{config['epochs']}], Batch [{batch_idx}], "
                     f"ClsLoss: {loss_cls.item():.4f}, ConsLoss: {loss_cons.item():.4f}, "
@@ -228,7 +226,7 @@ def train_step(student_net, teacher_net, compression_layer, optimizer, train_dat
 
     train_accuracy_epoch = 100 * train_correct / train_total  # Calculate epoch-level train accuracy
     avg_train_loss = train_loss_total / len(train_dataloader)
-    return avg_train_loss, train_accuracy_epoch, student_net, optimizer, False, train_accuracy_epoch, batch_step  # 返回 batch_step
+    return avg_train_loss, train_accuracy_epoch, student_net, optimizer, False, train_accuracy_epoch # batch_step 从返回值中移除
 
 
 # --- Evaluation Function (remains mostly the same) ---
@@ -265,11 +263,8 @@ def save_feature_map(feature_map, name, batch_idx, feature_maps_dir="feature_map
 
 
 # --- WandB Logging Wrapper ---
-def wandb_log_wrapper(log_dict, step=None):  # 接受 step 参数，默认为 None
-    if step is not None:
-        wandb.log(log_dict, step=step)  # 如果 step 不为 None，则传入 step 参数
-    else:
-        wandb.log(log_dict)  # 否则使用 wandb 默认的 step 递增
+def wandb_log_wrapper(log_dict): # step 参数移除
+    wandb.log(log_dict)  # wandb.log 默认使用自动递增 step
 
 
 # --- Main Training Function ---
@@ -290,16 +285,15 @@ def train_model(config):
     best_model_state = None
 
     disable_compression_layer = False  # Flag for debugging
-    batch_step = 0  # 初始化 batch_step
-    epoch_step = 0  # 初始化 epoch_step
+    # batch_step 和 epoch_step 移除
 
     for epoch in range(config["epochs"]):
-        avg_train_loss, train_accuracy, student_net, optimizer, nan_loss_detected, epoch_train_accuracy, batch_step = \
-            train_step(  # train_step 返回 batch_step
+        avg_train_loss, train_accuracy, student_net, optimizer, nan_loss_detected, epoch_train_accuracy = \
+            train_step(  # train_step 返回值中 batch_step 移除
                 student_net, teacher_net, compression_layer, optimizer,
                 train_dataloader, criterion, config, device,
                 inverse_aug1_transform, inverse_aug2_transform, epoch,
-                wandb_log_wrapper, disable_compression_layer, batch_step  # 传入 batch_step
+                wandb_log_wrapper, disable_compression_layer # batch_step 参数移除
             )
 
         if nan_loss_detected:
@@ -319,8 +313,7 @@ def train_model(config):
             # Use epoch_train_accuracy if available, otherwise fall back to train_accuracy (though it should always be available now)
             "train/loss": avg_train_loss
         }
-        wandb_log_wrapper(epoch_log, step=epoch_step)  # 传入 epoch_step
-        epoch_step += 1  # 递增 epoch_step
+        wandb_log_wrapper(epoch_log) # wandb_log 默认使用自动递增 step
         train_accuracy_str = f"{epoch_train_accuracy:.2f}%" if epoch_train_accuracy is not None else 'N/A'  # 格式化 train_accuracy
 
         print(
@@ -332,7 +325,7 @@ def train_model(config):
             epochs_no_improve = 0
             best_model_state = student_net.state_dict()
             torch.save({'model_state_dict': best_model_state}, config["student_model_save_path"])
-            wandb_log_wrapper({"best_val_accuracy": best_val_accuracy}, step=epoch_step - 1)  # 最佳验证集准确率也使用 epoch_step
+            wandb_log_wrapper({"best_val_accuracy": best_val_accuracy}) # wandb_log 默认使用自动递增 step
             print(f"Validation accuracy improved, saving model to {config['student_model_save_path']}")
         else:
             epochs_no_improve += 1
@@ -359,8 +352,7 @@ def train_model(config):
 
     accuracy, avg_loss = evaluate(student_net, test_loader, device, criterion)
     print(f"Test Accuracy with best model: {accuracy:.2f}%, Test Loss: {avg_loss:.4f}")
-    wandb_log_wrapper({"final_test_accuracy": accuracy, "final_test_loss": avg_loss},
-                      step=epoch_step)  # 最终测试集结果使用 epoch_step
+    wandb_log_wrapper({"final_test_accuracy": accuracy, "final_test_loss": avg_loss}) # wandb_log 默认使用自动递增 step
 
 
 def main():
