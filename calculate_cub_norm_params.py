@@ -1,6 +1,6 @@
 import torch
 import torchvision.transforms as transforms
-from cub_dataset import CUB_200  # 确保 cub_dataset.py 文件在同一目录下
+from writing_custom_datasets import CUB_200 # 确保 cub_dataset.py 文件在同一目录下
 
 from torch.utils.data import DataLoader
 
