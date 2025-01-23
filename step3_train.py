@@ -6,7 +6,8 @@ import torchvision.transforms.v2 as transforms
 import os
 import wandb
 from torchvision.utils import save_image
-import tqdm  # 导入 tqdm
+import tqdm
+import argparse
 
 from semi_supervised_dataset import SemiSupervisedCUB200
 from contrastive_dataset import create_contrastive_dataloader
@@ -15,15 +16,15 @@ from utils import consistency_loss, get_features, visualize_pseudo_labels
 
 
 # --- Configuration ---
-def get_default_config():
+def get_default_config(lr=1e-3, unlabeled_ratio=0.6):
     config = {
         "batch_size": 200,
         "image_size": 224,
         "num_classes": 200,
         "layer_name": 'layer4',
-        "unlabeled_ratio": 0.4,
+        "unlabeled_ratio": unlabeled_ratio,
         "epochs": 100,
-        "lr": 1e-2,
+        "lr": lr,
         "patience": 100,
         "improvement_threshold": 1.0,
         "alpha": 5.0,
@@ -31,7 +32,7 @@ def get_default_config():
         "teacher_weights_path": 'model_checkpoints/best_model.pth',
         "student_model_save_path": 'studentmodel_best.pth',
         "feature_maps_dir": "feature_maps",
-        "cons_loss_factor": 1  # 新增 cons_loss_factor 到 config
+        "cons_loss_factor": 1
     }
     return config
 
@@ -96,7 +97,7 @@ def initialize_models(config, device):
         except RuntimeError as e:
             print(f"Error loading TeacherNet weights: {e}")
             print("Ensure checkpoint is compatible with ResNet50 and output classes.")
-            return None, None, None  # Indicate failure
+            return None, None, None
     else:
         print("No custom TeacherNet checkpoint found, using pretrained weights.")
 
@@ -109,7 +110,7 @@ def initialize_models(config, device):
     ).float()
 
     student_net.to(device)
-    teacher_net.to(device).eval()  # Set teacher to eval mode here
+    teacher_net.to(device).eval()
     compression_layer.to(device)
 
     return student_net, teacher_net, compression_layer
@@ -126,16 +127,16 @@ def create_optimizer(student_net, compression_layer, config):
 
 # --- Training Step ---
 def train_step(student_net, teacher_net, compression_layer, optimizer, train_dataloader, criterion, config, device,
-               inverse_aug1_transform, inverse_aug2_transform, epoch, wandb_log, disable_compression_layer=False): # batch_step 参数移除
-    student_net.train()  # Ensure student is in train mode
+               inverse_aug1_transform, inverse_aug2_transform, epoch, wandb_log, disable_compression_layer=False):
+    student_net.train()
     train_loss_total = 0
     train_correct = 0
     train_total = 0
 
     progress_bar = tqdm.tqdm(enumerate(train_dataloader), total=len(train_dataloader),
-                             desc=f"Epoch [{epoch + 1}/{config['epochs']}]")  # 添加 tqdm
+                             desc=f"Epoch [{epoch + 1}/{config['epochs']}]")
 
-    for batch_idx, contrastive_batch in progress_bar:  # 使用 tqdm 包装 dataloader
+    for batch_idx, contrastive_batch in progress_bar:
         original_images = contrastive_batch['original'].to(device).float()
         aug1_images = contrastive_batch['aug1'].to(device).float()
         aug2_images = contrastive_batch['aug2'].to(device).float()
@@ -181,14 +182,14 @@ def train_step(student_net, teacher_net, compression_layer, optimizer, train_dat
             invaug2_Ft = inverse_aug2_transform(Ft_compressed)
             loss_cons = consistency_loss(invaug2_Ft, invaug1_Fs)
 
-            loss_total = loss_cls + config["cons_loss_factor"] * loss_cons  # 使用 config 中的 cons_loss_factor
+            loss_total = loss_cls + config["cons_loss_factor"] * loss_cons
 
             if torch.isnan(loss_total):
                 print("Error: NaN detected in loss. Stopping training.")
                 save_image(original_images, f"error_batch_{batch_idx}_original.png")
                 save_image(aug1_images, f"error_batch_{batch_idx}_aug1.png")
                 save_image(aug2_images, f"error_batch_{batch_idx}_aug2.png")
-                return float('nan'), None, None, None, True, None  # Indicate NaN loss, return None for train_accuracy
+                return float('nan'), None, None, None, True, None
 
             train_loss_total += loss_total.item()
 
@@ -203,13 +204,13 @@ def train_step(student_net, teacher_net, compression_layer, optimizer, train_dat
                     "train/batch_w_mean": w.mean().item(),
                     "train/batch_total_loss": loss_total.item()
                 }
-                wandb_log(batch_log)  # wandb_log 默认使用自动递增 step
+                wandb_log_wrapper(batch_log)
                 print(
                     f"Epoch [{epoch + 1}/{config['epochs']}], Batch [{batch_idx}], "
                     f"ClsLoss: {loss_cls.item():.4f}, ConsLoss: {loss_cons.item():.4f}, "
                     f"w_mean: {w.mean().item():.4f}, TotalLoss: {loss_total.item():.4f}"
                 )
-                progress_bar.set_postfix({  # 添加 tqdm 后缀显示 loss
+                progress_bar.set_postfix({
                     'ClsLoss': f'{loss_cls.item():.4f}',
                     'ConsLoss': f'{loss_cons.item():.4f}',
                     'TotalLoss': f'{loss_total.item():.4f}',
@@ -224,9 +225,9 @@ def train_step(student_net, teacher_net, compression_layer, optimizer, train_dat
             save_image(aug2_images, f"error_batch_{batch_idx}_aug2.png")
             raise
 
-    train_accuracy_epoch = 100 * train_correct / train_total  # Calculate epoch-level train accuracy
+    train_accuracy_epoch = 100 * train_correct / train_total
     avg_train_loss = train_loss_total / len(train_dataloader)
-    return avg_train_loss, train_accuracy_epoch, student_net, optimizer, False, train_accuracy_epoch # batch_step 从返回值中移除
+    return avg_train_loss, train_accuracy_epoch, student_net, optimizer, False, train_accuracy_epoch
 
 
 # --- Evaluation Function (remains mostly the same) ---
@@ -263,8 +264,8 @@ def save_feature_map(feature_map, name, batch_idx, feature_maps_dir="feature_map
 
 
 # --- WandB Logging Wrapper ---
-def wandb_log_wrapper(log_dict): # step 参数移除
-    wandb.log(log_dict)  # wandb.log 默认使用自动递增 step
+def wandb_log_wrapper(log_dict):
+    wandb.log(log_dict)
 
 
 # --- Main Training Function ---
@@ -273,7 +274,7 @@ def train_model(config):
     train_dataloader, test_loader, inverse_aug1_transform, inverse_aug2_transform = create_data_loaders(config)
     student_net, teacher_net, compression_layer = initialize_models(config, device)
 
-    if student_net is None:  # Check if model initialization failed
+    if student_net is None:
         print("Model initialization failed. Exiting.")
         return
 
@@ -284,23 +285,23 @@ def train_model(config):
     epochs_no_improve = 0
     best_model_state = None
 
-    disable_compression_layer = False  # Flag for debugging
-    # batch_step 和 epoch_step 移除
+    disable_compression_layer = False
+    epoch_history = {}
 
     for epoch in range(config["epochs"]):
         avg_train_loss, train_accuracy, student_net, optimizer, nan_loss_detected, epoch_train_accuracy = \
-            train_step(  # train_step 返回值中 batch_step 移除
+            train_step(
                 student_net, teacher_net, compression_layer, optimizer,
                 train_dataloader, criterion, config, device,
                 inverse_aug1_transform, inverse_aug2_transform, epoch,
-                wandb_log_wrapper, disable_compression_layer # batch_step 参数移除
+                wandb_log_wrapper, disable_compression_layer
             )
 
         if nan_loss_detected:
             print("Training stopped due to NaN loss.")
             break
 
-        if torch.isnan(torch.tensor(avg_train_loss)):  # Double check for nan outside train_step
+        if torch.isnan(torch.tensor(avg_train_loss)):
             print("Training stopped due to NaN loss after train step.")
             break
 
@@ -310,11 +311,10 @@ def train_model(config):
             "val/accuracy": accuracy,
             "val/loss": avg_loss,
             "train/accuracy": epoch_train_accuracy if epoch_train_accuracy is not None else train_accuracy,
-            # Use epoch_train_accuracy if available, otherwise fall back to train_accuracy (though it should always be available now)
             "train/loss": avg_train_loss
         }
-        wandb_log_wrapper(epoch_log) # wandb_log 默认使用自动递增 step
-        train_accuracy_str = f"{epoch_train_accuracy:.2f}%" if epoch_train_accuracy is not None else 'N/A'  # 格式化 train_accuracy
+        wandb_log_wrapper(epoch_log)
+        train_accuracy_str = f"{epoch_train_accuracy:.2f}%" if epoch_train_accuracy is not None else 'N/A'
 
         print(
             f"Epoch [{epoch + 1}/{config['epochs']}], Train Accuracy: {train_accuracy_str}, Train Loss: {avg_train_loss:.4f}, Test Accuracy: {accuracy:.2f}%, Test Loss: {avg_loss:.4f}")
@@ -325,13 +325,20 @@ def train_model(config):
             epochs_no_improve = 0
             best_model_state = student_net.state_dict()
             torch.save({'model_state_dict': best_model_state}, config["student_model_save_path"])
-            wandb_log_wrapper({"best_val_accuracy": best_val_accuracy}) # wandb_log 默认使用自动递增 step
+            wandb_log_wrapper({"best_val_accuracy": best_val_accuracy})
             print(f"Validation accuracy improved, saving model to {config['student_model_save_path']}")
         else:
             epochs_no_improve += 1
             if epochs_no_improve == config["patience"]:
                 print(f"Early stopping triggered at epoch {epoch + 1}")
                 break
+
+        epoch_history[epoch + 1] = {
+            'train_loss': avg_train_loss,
+            'train_accuracy': epoch_train_accuracy if epoch_train_accuracy is not None else train_accuracy,
+            'val_loss': avg_loss,
+            'val_accuracy': accuracy
+        }
 
     print("Training finished!")
 
@@ -343,7 +350,7 @@ def train_model(config):
 
     visualize_pseudo_labels(
         teacher_net=teacher_net,
-        dataset=train_dataloader.dataset.dataset,  # Access the underlying dataset
+        dataset=train_dataloader.dataset.dataset,
         device=device,
         layer_name=config["layer_name"],
         sample_size=500,
@@ -352,20 +359,28 @@ def train_model(config):
 
     accuracy, avg_loss = evaluate(student_net, test_loader, device, criterion)
     print(f"Test Accuracy with best model: {accuracy:.2f}%, Test Loss: {avg_loss:.4f}")
-    wandb_log_wrapper({"final_test_accuracy": accuracy, "final_test_loss": avg_loss}) # wandb_log 默认使用自动递增 step
+    wandb_log_wrapper({"final_test_accuracy": accuracy, "final_test_loss": avg_loss})
+
+    wandb.log({"epoch_metrics": wandb.Table(columns=['epoch', 'train_loss', 'train_accuracy', 'val_loss', 'val_accuracy'],
+                                            data=[[epoch, metrics['train_loss'], metrics['train_accuracy'], metrics['val_loss'], metrics['val_accuracy']]
+                                                  for epoch, metrics in epoch_history.items()])})
 
 
 def main():
     torch.multiprocessing.freeze_support()
-    torch.set_default_dtype(torch.float32)  # Ensure float32 is default at the very beginning
+    torch.set_default_dtype(torch.float32)
 
-    config = get_default_config()
+    parser = argparse.ArgumentParser(description="Run experiments with different lr and unlabeled_ratio")
+    parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
+    parser.add_argument('--unlabeled_ratio', type=float, default=0.6, help='Unlabeled ratio')
+    args = parser.parse_args()
+
+    config = get_default_config(lr=args.lr, unlabeled_ratio=args.unlabeled_ratio)
 
     wandb.init(project=config["project_name"], config=config,
-               name=f"cons_loss_factor_{config['cons_loss_factor']}")  # run name 包含 cons_loss_factor
+               name=f"lr_{config['lr']}_ur_{config['unlabeled_ratio']}")
     config = wandb.config
 
-    # 记录 cons_loss_factor 到 WandB config
     wandb.config.update({"cons_loss_factor": config["cons_loss_factor"]})
 
     train_model(config)
