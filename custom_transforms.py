@@ -4,13 +4,16 @@ import torchvision.transforms.v2 as T
 import torchvision.transforms.functional as F
 import random
 
+common_transforms = [
+    T.ToTensor(),
+    T.Normalize(mean=[0.0019043930806219578, 0.001958552747964859, 0.0016956437611952424],
+                std=[0.0006876591360196471, 0.0006849314086139202, 0.0007310538203455508]),
+    T.ToDtype(torch.float32, scale=True),
+    T.Resize((256, 256)),
+    # T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+]
+
 def get_augmentation_transforms(size=224):
-    common_transforms = [
-        T.ToTensor(),
-        T.ToDtype(torch.float32, scale=True),
-        T.Resize((256,256)),
-        # T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ]
     aug1 = T.Compose([
         *common_transforms,
         # T.ColorJitter(0.4, 0.4, 0.4, 0.1)
@@ -25,9 +28,11 @@ def get_augmentation_transforms(size=224):
 
 def get_inverse_transforms():
     inv_aug1 = T.Compose([
+        *common_transforms,
         T.RandomHorizontalFlip(p=1.0)  # 近似逆向
     ])
     inv_aug2 = T.Compose([
+        *common_transforms,
         T.RandomRotation(degrees=(-30, -30)),  # 近似逆向
         T.RandomHorizontalFlip(p=1),
         T.RandomAffine(degrees=0, translate=(0.1, 0.1), shear=(-10, 10, -10, 10))
