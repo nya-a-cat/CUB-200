@@ -371,21 +371,35 @@ def main():
     torch.set_default_dtype(torch.float32)
 
     parser = argparse.ArgumentParser(description="Run experiments with different lr and unlabeled_ratio")
-    parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
-    parser.add_argument('--unlabeled_ratio', type=float, default=0.6, help='Unlabeled ratio')
+    parser.add_argument('--lr', type=float, default=None, help='Learning rate') # set default=None
+    parser.add_argument('--unlabeled_ratio', type=float, default=None, help='Unlabeled ratio') # set default=None
     args = parser.parse_args()
 
-    config = get_default_config(lr=args.lr, unlabeled_ratio=args.unlabeled_ratio)
+    learning_rates = [0.001, 0.01, 0.1]
+    unlabeled_ratios = [0.4, 0.6, 0.8]
 
-    wandb.init(project=config["project_name"], config=config,
-               name=f"lr_{config['lr']}_ur_{config['unlabeled_ratio']}")
-    config = wandb.config
-
-    wandb.config.update({"cons_loss_factor": config["cons_loss_factor"]})
-
-    train_model(config)
-
-    wandb.finish()
+    if args.lr is not None and args.unlabeled_ratio is not None:
+        # Run single experiment if lr and unlabeled_ratio are provided as arguments
+        config = get_default_config(lr=args.lr, unlabeled_ratio=args.unlabeled_ratio)
+        wandb.init(project=config["project_name"], config=config,
+                   name=f"lr_{config['lr']}_ur_{config['unlabeled_ratio']}")
+        wandb.config.update({"cons_loss_factor": config["cons_loss_factor"]})
+        train_model(config)
+        wandb.finish()
+    else:
+        # Run grid search if lr and unlabeled_ratio are not provided as arguments
+        for lr in learning_rates:
+            for unlabeled_ratio in unlabeled_ratios:
+                config = get_default_config(lr=lr, unlabeled_ratio=unlabeled_ratio)
+                wandb.init(project=config["project_name"], config=config,
+                           name=f"lr_{config['lr']}_ur_{config['unlabeled_ratio']}")
+                wandb.config.update({"cons_loss_factor": config["cons_loss_factor"]})
+                print(f"Starting experiment with lr={config['lr']}, unlabeled_ratio={config['unlabeled_ratio']}")
+                train_model(config)
+                print(f"Finished experiment with lr={config['lr']}, unlabeled_ratio={config['unlabeled_ratio']}")
+                wandb.finish()
+                print("-" * 50)
+        print("All experiments finished!")
 
 
 if __name__ == "__main__":
