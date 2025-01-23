@@ -24,7 +24,7 @@ def get_default_config():
         "unlabeled_ratio": 0.6,
         "epochs": 100,
         "lr": 1e-3,
-        "patience": 10,
+        "patience": 100,
         "improvement_threshold": 1.0,
         "alpha": 5.0,
         "project_name": "semi-supervised-learning",
