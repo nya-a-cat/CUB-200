@@ -59,6 +59,7 @@ def create_data_loaders(config):
         root='CUB-200',
         train=False,
         transform=transforms.Compose([
+            transforms.Resize((256, 256)),
             transforms.ToTensor(),
         ]),
         unlabeled_ratio=0.0
