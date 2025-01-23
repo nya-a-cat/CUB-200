@@ -23,7 +23,7 @@ def get_default_config():
         "layer_name": 'layer4',
         "unlabeled_ratio": 0.4,
         "epochs": 100,
-        "lr": 1e-3,
+        "lr": 1e-2,
         "patience": 100,
         "improvement_threshold": 1.0,
         "alpha": 5.0,
