@@ -348,14 +348,14 @@ def train_model(config):
         print(f"Loaded best student model weights from '{config['student_model_save_path']}'.")
         wandb.save(config["student_model_save_path"])
 
-    visualize_pseudo_labels(
-        teacher_net=teacher_net,
-        dataset=train_dataloader.dataset.dataset,
-        device=device,
-        layer_name=config["layer_name"],
-        sample_size=500,
-        alpha=config["alpha"]
-    )
+    # visualize_pseudo_labels(
+    #     teacher_net=teacher_net,
+    #     dataset=train_dataloader.dataset.dataset,
+    #     device=device,
+    #     layer_name=config["layer_name"],
+    #     sample_size=500,
+    #     alpha=config["alpha"]
+    # )
 
     accuracy, avg_loss = evaluate(student_net, test_loader, device, criterion)
     print(f"Test Accuracy with best model: {accuracy:.2f}%, Test Loss: {avg_loss:.4f}")
