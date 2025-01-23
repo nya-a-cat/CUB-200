@@ -82,7 +82,7 @@ def visualize_consistency(original_image, aug1_image, aug2_image,
     plt.show()
 
 def consistency_loss(invaug2_Ft, invaug1_Fs):
-    print(F.mse_loss(invaug2_Ft, invaug1_Fs))
+    # print(F.mse_loss(invaug2_Ft, invaug1_Fs))
     return F.mse_loss(invaug2_Ft, invaug1_Fs)
 
 def get_features(model, images, layer_name):
